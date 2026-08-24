@@ -23,7 +23,6 @@ response => response,
 
 error => {
 
-```
 console.error(
   "API Error:",
   error.response?.data ||
@@ -33,7 +32,6 @@ console.error(
 return Promise.reject(
   error
 );
-```
 
 }
 );
@@ -159,6 +157,32 @@ const response =
 await api.post(
 "/devices",
 device
+);
+
+return response.data;
+}
+
+export async function updateDevice(
+deviceId,
+device
+) {
+
+const response =
+await api.patch(
+`/devices/${deviceId}`,
+device
+);
+
+return response.data;
+}
+
+export async function deleteDevice(
+deviceId
+) {
+
+const response =
+await api.delete(
+`/devices/${deviceId}`
 );
 
 return response.data;
