@@ -1,0 +1,24 @@
+{
+  "name": "net-escalate-backend",
+  "version": "1.0.0",
+  "description": "AI Network and IT Incident Escalation Agent",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+  },
+  "dependencies": {
+    "@call-e/calle": "^0.2.0",
+    "axios": "^1.19.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "mongoose": "^8.18.0",
+    "net-snmp": "^3.26.3",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}
