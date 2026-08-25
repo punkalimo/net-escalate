@@ -36,16 +36,16 @@ router.post("/:deviceId/discover", async (req, res) => {
       });
     }
 
-    if (!["1", "2c", 1, 2].includes(device.snmp?.version || "2c")) {
+    if (!["1", "2c", "3", 1, 2, 3].includes(device.snmp?.version || "2c")) {
       return res.status(400).json({
         success: false,
         code: "SNMP_VERSION_UNSUPPORTED",
-        message: `SNMP ${device.snmp?.version || "unknown"} is not supported by the current discovery engine. Use SNMP v1 or v2c.`
+        message: `SNMP ${device.snmp?.version || "unknown"} is not supported by the discovery engine.`
       });
     }
 
-    // Fail early with a useful diagnostic instead of waiting for interface
-    // discovery to time out and returning the generic "Failed to discover interfaces".
+    // Validate credentials and reachability before starting a potentially
+    // long interface walk. This gives the UI a useful failure reason.
     try {
       await testSnmpConnection(device);
     } catch (snmpError) {
@@ -53,7 +53,7 @@ router.post("/:deviceId/discover", async (req, res) => {
       return res.status(502).json({
         success: false,
         code: "SNMP_UNREACHABLE",
-        message: `SNMP connection to ${device.hostname} (${device.ipAddress}) failed. Verify that SNMP is enabled on the device and that the SNMP version/community are correct. ${reason}`,
+        message: `SNMP connection to ${device.hostname} (${device.ipAddress}) failed. Verify SNMP is enabled and the configured version/credentials are correct. ${reason}`,
         error: reason
       });
     }
@@ -65,7 +65,7 @@ router.post("/:deviceId/discover", async (req, res) => {
     }, {});
 
     const interfaces = await Promise.all(discovered.map(async item => {
-      const name = item.ifDescr || `Interface ${item.ifIndex}`;
+      const name = item.displayName || item.ifName || item.ifDescr || `Interface ${item.ifIndex}`;
       let status = "UNKNOWN";
       let metrics = null;
       try { status = (await getInterfaceStatus(device, item.ifIndex)).operState || "UNKNOWN"; }
@@ -76,7 +76,7 @@ router.post("/:deviceId/discover", async (req, res) => {
       const rates = metrics ? calculateRates(metrics, previous) : { inBps: null, outBps: null, utilizationPercent: null };
       return {
         name,
-        description: name,
+        description: item.ifAlias || item.ifDescr || name,
         ipAddress: "",
         status,
         lastCheckedAt: new Date(),
@@ -87,7 +87,15 @@ router.post("/:deviceId/discover", async (req, res) => {
 
     await Device.collection.updateOne({ deviceId: device.deviceId }, { $set: { interfaces, updatedAt: new Date() } });
     if (global.io) global.io.emit("device_updated", { ...device.toObject(), interfaces });
-    return res.json({ success: true, deviceId: device.deviceId, interfaces });
+    return res.json({
+      success: true,
+      deviceId: device.deviceId,
+      vendor: device.vendor,
+      model: device.model,
+      snmpVersion: device.snmp?.version || "2c",
+      count: interfaces.length,
+      interfaces
+    });
   } catch (error) {
     console.error("INTERFACE DISCOVERY ERROR:", error);
     const reason = error?.code ? `${error.message} (${error.code})` : (error?.message || String(error));
