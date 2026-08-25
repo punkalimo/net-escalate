@@ -55,17 +55,8 @@ router.post("/:deviceId/discover", async (req, res) => {
   }
 });
 
-router.get("/:deviceId", async (req, res) => {
-  try {
-    const device = await Device.findOne({ deviceId: req.params.deviceId }).lean();
-    if (!device) return res.status(404).json({ success: false, message: "Device not found." });
-    return res.json({ success: true, deviceId: device.deviceId, interfaces: device.interfaces || [] });
-  } catch (error) {
-    console.error("GET INTERFACES ERROR:", error);
-    return res.status(500).json({ success: false, message: "Failed to retrieve interfaces.", error: error.message });
-  }
-});
-
+// Keep the history route before /:deviceId so Express does not interpret
+// the literal "history" segment as part of the deviceId parameter.
 router.get("/:deviceId/history", async (req, res) => {
   try {
     const device = await Device.findOne({ deviceId: req.params.deviceId }).lean();
@@ -80,6 +71,17 @@ router.get("/:deviceId/history", async (req, res) => {
   } catch (error) {
     console.error("INTERFACE HISTORY ERROR:", error);
     return res.status(500).json({ success: false, message: "Failed to retrieve interface history.", error: error.message });
+  }
+});
+
+router.get("/:deviceId", async (req, res) => {
+  try {
+    const device = await Device.findOne({ deviceId: req.params.deviceId }).lean();
+    if (!device) return res.status(404).json({ success: false, message: "Device not found." });
+    return res.json({ success: true, deviceId: device.deviceId, interfaces: device.interfaces || [] });
+  } catch (error) {
+    console.error("GET INTERFACES ERROR:", error);
+    return res.status(500).json({ success: false, message: "Failed to retrieve interfaces.", error: error.message });
   }
 });
 
