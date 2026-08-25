@@ -34,3 +34,39 @@ body {
 .form-input:focus {
   border-color: rgb(59 130 246);
 }
+
+/* Phase 4 launcher rail: RCA, Phase 4 and Topology form one vertical
+   command rail on the right edge instead of competing horizontally. */
+button[title="Open Root Cause Analysis"],
+button[title="Open Phase 4 Operations Suite"],
+button[title="Open Network Topology"],
+button[title="Open Topology"] {
+  position: fixed !important;
+  right: 1rem !important;
+  bottom: auto !important;
+  left: auto !important;
+  z-index: 70 !important;
+  transform: translateY(-50%) !important;
+}
+
+button[title="Open Root Cause Analysis"] {
+  top: calc(50% - 88px) !important;
+}
+
+button[title="Open Phase 4 Operations Suite"] {
+  top: 50% !important;
+}
+
+button[title="Open Network Topology"],
+button[title="Open Topology"] {
+  top: calc(50% + 88px) !important;
+}
+
+@media (max-width: 640px) {
+  button[title="Open Root Cause Analysis"],
+  button[title="Open Phase 4 Operations Suite"],
+  button[title="Open Network Topology"],
+  button[title="Open Topology"] {
+    right: 0.75rem !important;
+  }
+}
