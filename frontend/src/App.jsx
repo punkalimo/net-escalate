@@ -39,7 +39,7 @@ function openDestination(id) {
   }
 
   if (id === "topology") {
-    document.querySelector('button[title="Open Network Topology"]')?.click();
+    document.querySelector('button.fixed.bottom-6.right-6')?.click();
   }
 }
 
@@ -48,27 +48,13 @@ function NavigationBridge() {
   const [incidentCount, setIncidentCount] = useState(0);
 
   useEffect(() => {
-    let lastCount = null;
-
-    const sync = () => {
-      const buttons = Array.from(document.querySelectorAll("button"));
-      const incident = buttons.find(button => button.textContent?.includes("Incidents"));
-      const count = incident?.querySelector("span:last-child")?.textContent?.trim();
-      const nextCount = count && /^\d+$/.test(count) ? Number(count) : 0;
-
-      // NocDashboard and TopologyView can update the DOM frequently. Do not
-      // trigger a React render for every MutationObserver callback when the
-      // incident count has not actually changed.
-      if (nextCount !== lastCount) {
-        lastCount = nextCount;
-        setIncidentCount(nextCount);
-      }
+    const syncCount = event => {
+      const nextCount = Number(event.detail?.count);
+      setIncidentCount(Number.isFinite(nextCount) ? nextCount : 0);
     };
 
-    sync();
-    const observer = new MutationObserver(sync);
-    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
-    return () => observer.disconnect();
+    window.addEventListener("netescalate:incident-count", syncCount);
+    return () => window.removeEventListener("netescalate:incident-count", syncCount);
   }, []);
 
   const navigate = id => {
