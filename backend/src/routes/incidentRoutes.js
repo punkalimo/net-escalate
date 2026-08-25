@@ -1,6 +1,7 @@
 import express from "express";
 import Incident from "../models/Incident.js";
 import { processIncident } from "../services/incidentService.js";
+import { correlateActiveIncidents } from "../services/incidentCorrelationService.js";
 
 async function generateUniqueIncidentId() {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -63,6 +64,30 @@ export default function incidentRoutes(io) {
     } catch (error) {
       console.error("GET INCIDENTS ERROR:", error);
       return res.status(500).json({ success: false, message: "Failed to retrieve incidents.", error: error.message });
+    }
+  });
+
+  // Analyse active incidents against the discovered network topology and identify
+  // a likely root incident plus downstream child/symptom incidents.
+  router.get("/correlation", async (req, res) => {
+    try {
+      const result = await correlateActiveIncidents({ forceTopology: req.query.refresh === "true" });
+      if (io) io.emit("incident_correlation_updated", result);
+      return res.json(result);
+    } catch (error) {
+      console.error("INCIDENT CORRELATION ERROR:", error);
+      return res.status(500).json({ success: false, message: "Incident correlation failed.", error: error.message });
+    }
+  });
+
+  router.post("/correlation/rebuild", async (req, res) => {
+    try {
+      const result = await correlateActiveIncidents({ forceTopology: true });
+      if (io) io.emit("incident_correlation_updated", result);
+      return res.json(result);
+    } catch (error) {
+      console.error("INCIDENT CORRELATION REBUILD ERROR:", error);
+      return res.status(500).json({ success: false, message: "Incident correlation rebuild failed.", error: error.message });
     }
   });
 
