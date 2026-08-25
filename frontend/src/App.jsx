@@ -48,13 +48,17 @@ function NavigationBridge() {
   const [incidentCount, setIncidentCount] = useState(0);
 
   useEffect(() => {
-    const syncCount = event => {
-      const nextCount = Number(event.detail?.count);
-      setIncidentCount(Number.isFinite(nextCount) ? nextCount : 0);
+    const sync = () => {
+      const buttons = Array.from(document.querySelectorAll("button"));
+      const incident = buttons.find(button => button.textContent?.includes("Incidents"));
+      const count = incident?.querySelector("span:last-child")?.textContent?.trim();
+      const nextCount = count && /^\d+$/.test(count) ? Number(count) : 0;
+      setIncidentCount(current => current === nextCount ? current : nextCount);
     };
 
-    window.addEventListener("netescalate:incident-count", syncCount);
-    return () => window.removeEventListener("netescalate:incident-count", syncCount);
+    sync();
+    const interval = window.setInterval(sync, 1000);
+    return () => window.clearInterval(interval);
   }, []);
 
   const navigate = id => {
