@@ -11,6 +11,10 @@ export const HEALTH_THRESHOLDS = {
   discardsCritical: 100
 };
 
+// Prevent overlapping polls from creating two incidents for the same
+// device/interface/fault before either poll has finished writing to MongoDB.
+const incidentLocks = new Set();
+
 function finite(value) {
   return Number.isFinite(Number(value)) ? Number(value) : 0;
 }
@@ -76,57 +80,145 @@ export function evaluateInterfaceHealth(metrics, status) {
   return { health, score: Number(score.toFixed(1)), reasons, severity };
 }
 
-function generateIncidentId() {
-  return `NET-${Math.floor(1000 + Math.random() * 9000)}`;
+async function generateUniqueIncidentId() {
+  // Random four-digit IDs are kept for the existing UI format, but we now
+  // check MongoDB before returning one so a collision cannot abort monitoring.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const incidentId = `NET-${Math.floor(1000 + Math.random() * 9000)}`;
+    const exists = await Incident.exists({ incidentId });
+    if (!exists) return incidentId;
+  }
+
+  // Extremely unlikely fallback: use a timestamp-derived ID while retaining
+  // the NET- prefix. The unique Mongo index remains the final protection.
+  return `NET-${Date.now().toString().slice(-9)}`;
 }
 
 async function getLevelOneTechnician() {
   return Technician.findOne({ active: true, level: 1 }).sort({ createdAt: 1 }).lean();
 }
 
-export async function syncInterfaceIncident({ device, iface, healthResult }) {
-  const activeIncidentId = iface.metrics?.activeIncidentId || null;
+function fingerprintFor(device, iface, healthResult) {
+  const type = healthResult.health === "DOWN"
+    ? "DOWN"
+    : healthResult.health === "CRITICAL"
+      ? "CRITICAL"
+      : healthResult.health === "DEGRADED"
+        ? "DEGRADED"
+        : "WARNING";
+  return `${device.deviceId}:INTERFACE_HEALTH:${Number(iface.ifIndex)}:${type}`;
+}
 
-  if (["HEALTHY", "WARNING", "UNKNOWN"].includes(healthResult.health)) {
-    if (activeIncidentId) {
+export async function syncInterfaceIncident({ device, iface, healthResult }) {
+  const interfaceMetrics = iface.metrics || {};
+  const currentIncidentId = interfaceMetrics.activeIncidentId || null;
+  const isHealthy = ["HEALTHY", "WARNING", "UNKNOWN"].includes(healthResult.health);
+  const isFault = ["DOWN", "DEGRADED", "CRITICAL"].includes(healthResult.health);
+
+  // Recovery is the only event that clears the interface's latch. This is
+  // deliberately based on actual interface recovery, not on a technician
+  // resolving the incident manually.
+  if (isHealthy) {
+    if (currentIncidentId) {
       const resolved = await Incident.findOneAndUpdate(
-        { incidentId: activeIncidentId, status: { $ne: "RESOLVED" } },
+        { incidentId: currentIncidentId, status: { $ne: "RESOLVED" } },
         { status: "RESOLVED", resolvedAt: new Date() },
         { new: true }
       );
       if (resolved && global.io) global.io.emit("incident_updated", resolved);
     }
-    return null;
+    return { incidentId: null, latch: false, recovered: Boolean(currentIncidentId) };
   }
 
-  if (activeIncidentId) return activeIncidentId;
-
-  const technician = await getLevelOneTechnician();
-  if (!technician?.phone) {
-    console.warn(`[INTERFACE HEALTH] No active level 1 technician; incident not created for ${device.hostname} ${iface.name}`);
-    return null;
+  if (!isFault) {
+    return { incidentId: currentIncidentId, latch: Boolean(currentIncidentId), recovered: false };
   }
 
-  const incident = await Incident.create({
-    incidentId: generateIncidentId(),
-    device: `${device.hostname} / ${iface.name}`,
-    location: device.location || "Unknown location",
-    severity: healthResult.severity,
-    description: `Automatic interface health alert: ${healthResult.reasons.join(" ")}`,
-    technician: {
-      id: technician.technicianId,
-      name: technician.name,
-      phone: technician.phone
+  const fingerprint = fingerprintFor(device, iface, healthResult);
+  const lockKey = `${device.deviceId}:${Number(iface.ifIndex)}:${healthResult.health}`;
+
+  // If the monitor already has a latched incident ID, verify its state but do
+  // not create another incident merely because somebody manually resolved it.
+  if (currentIncidentId) {
+    const current = await Incident.findOne({ incidentId: currentIncidentId }).select("incidentId status source fingerprint").lean();
+    if (current && current.status !== "RESOLVED") {
+      return { incidentId: currentIncidentId, latch: true, recovered: false };
     }
-  });
+    // A resolved incident is intentionally still latched until the interface
+    // becomes healthy. This is the behaviour required for a persistent outage.
+    if (interfaceMetrics.incidentLatched === true) {
+      return { incidentId: currentIncidentId, latch: true, recovered: false };
+    }
+  }
 
-  if (global.io) global.io.emit("incident_created", incident);
+  // Query the database as a second line of defence. This also handles a
+  // restart where the in-memory/device latch is missing.
+  const existing = await Incident.findOne({
+    source: "INTERFACE_HEALTH",
+    fingerprint,
+    status: { $ne: "RESOLVED" }
+  }).sort({ createdAt: -1 }).lean();
 
-  // Keep the existing escalation workflow responsible for technician notification.
-  const { processIncident } = await import("./incidentService.js");
-  processIncident(incident, global.io).catch(error => {
-    console.error(`[INTERFACE HEALTH] Escalation failed for ${incident.incidentId}: ${error.message}`);
-  });
+  if (existing) {
+    return { incidentId: existing.incidentId, latch: true, recovered: false };
+  }
 
-  return incident.incidentId;
+  // If the same fault has already been manually resolved, do not reopen it
+  // until a real recovery has occurred. The interface monitor's latch is what
+  // differentiates an ongoing outage from a new outage after recovery.
+  if (interfaceMetrics.incidentLatched === true) {
+    return { incidentId: currentIncidentId, latch: true, recovered: false };
+  }
+
+  if (incidentLocks.has(lockKey)) {
+    return { incidentId: currentIncidentId, latch: true, recovered: false };
+  }
+
+  incidentLocks.add(lockKey);
+  try {
+    // Re-check after taking the lock to close the race between simultaneous polls.
+    const duplicate = await Incident.findOne({
+      source: "INTERFACE_HEALTH",
+      fingerprint,
+      status: { $ne: "RESOLVED" }
+    }).sort({ createdAt: -1 }).lean();
+    if (duplicate) {
+      return { incidentId: duplicate.incidentId, latch: true, recovered: false };
+    }
+
+    const technician = await getLevelOneTechnician();
+    if (!technician?.phone) {
+      console.warn(`[INTERFACE HEALTH] No active level 1 technician; incident not created for ${device.hostname} ${iface.name}`);
+      return { incidentId: currentIncidentId, latch: true, recovered: false };
+    }
+
+    const incidentId = await generateUniqueIncidentId();
+    const incident = await Incident.create({
+      incidentId,
+      device: `${device.hostname} / ${iface.name}`,
+      location: device.location || "Unknown location",
+      severity: healthResult.severity,
+      description: `Automatic interface health alert: ${healthResult.reasons.join(" ")}`,
+      technician: {
+        id: technician.technicianId,
+        name: technician.name,
+        phone: technician.phone
+      },
+      source: "INTERFACE_HEALTH",
+      fingerprint,
+      interfaceName: iface.name,
+      interfaceIndex: Number(iface.ifIndex)
+    });
+
+    if (global.io) global.io.emit("incident_created", incident);
+
+    const { processIncident } = await import("./incidentService.js");
+    processIncident(incident, global.io).catch(error => {
+      console.error(`[INTERFACE HEALTH] Escalation failed for ${incident.incidentId}: ${error.message}`);
+    });
+
+    return { incidentId: incident.incidentId, latch: true, recovered: false };
+  } finally {
+    incidentLocks.delete(lockKey);
+  }
 }
