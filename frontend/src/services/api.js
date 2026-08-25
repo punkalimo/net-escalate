@@ -79,4 +79,12 @@ export async function pollDevice(deviceId) {
 const response = await api.post(`/devices/${deviceId}/poll`);
 return response.data;
 }
+export async function discoverDeviceInterfaces(deviceId) {
+const response = await api.post(`/interfaces/${deviceId}/discover`);
+return response.data;
+}
+export async function getDeviceInterfaces(deviceId) {
+const response = await api.get(`/interfaces/${deviceId}`);
+return response.data;
+}
 export default api;
