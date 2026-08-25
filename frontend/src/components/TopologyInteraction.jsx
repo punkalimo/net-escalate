@@ -1,161 +1,21 @@
 import { useEffect, useRef } from "react";
-import { Maximize2, Minus, Plus, RotateCcw } from "lucide-react";
-
-const MIN_ZOOM = 0.55;
-const MAX_ZOOM = 2.8;
-const STEP = 0.15;
-
-function clamp(value) {
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
-}
-
-function isTopologySvg(svg) {
-  if (!svg) return false;
-  const classes = svg.getAttribute("class") || "";
-  const viewBox = svg.getAttribute("viewBox") || "";
-  return classes.includes("min-w-[1000px]") || classes.includes("min-w-[1100px]") || viewBox.startsWith("0 0 1400 920");
-}
-
-function makeButton(title, icon, onClick) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.title = title;
-  button.setAttribute("aria-label", title);
-  button.className = "inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700 bg-slate-900/90 text-slate-300 shadow-lg transition hover:border-slate-500 hover:bg-slate-800 hover:text-white";
-  button.appendChild(icon);
-  button.addEventListener("click", onClick);
-  return button;
-}
-
-function createToolbar(svg, state, update) {
-  const host = svg.parentElement;
-  if (!host || host.querySelector("[data-topology-zoom-toolbar]")) return;
-
-  const toolbar = document.createElement("div");
-  toolbar.dataset.topologyZoomToolbar = "true";
-  toolbar.className = "pointer-events-auto absolute right-4 top-4 z-20 flex items-center gap-1 rounded-xl border border-slate-700/80 bg-[#08101c]/95 p-1.5 shadow-2xl backdrop-blur-xl";
-
-  const zoomOut = makeButton("Zoom out", Minus, () => update(clamp(state.zoom - STEP)));
-  const reset = makeButton("Reset view", RotateCcw, () => {
-    state.zoom = 1;
-    state.x = 0;
-    state.y = 0;
-    update();
-  });
-  const zoomIn = makeButton("Zoom in", Plus, () => update(clamp(state.zoom + STEP)));
-  const fit = makeButton("Fit / center", Maximize2, () => {
-    state.zoom = 1;
-    state.x = 0;
-    state.y = 0;
-    update();
-  });
-
-  const readout = document.createElement("span");
-  readout.className = "min-w-[52px] px-1 text-center font-mono text-[10px] font-semibold text-slate-400";
-
-  toolbar.append(zoomOut, readout, zoomIn, fit, reset);
-  host.appendChild(toolbar);
-  state.toolbar = toolbar;
-  state.readout = readout;
-}
-
-function installOnSvg(svg) {
-  if (!isTopologySvg(svg) || svg.dataset.topologyInteractive === "true") return;
-  const host = svg.parentElement;
-  if (!host) return;
-
-  host.classList.add("relative");
-  svg.dataset.topologyInteractive = "true";
-  svg.style.transformOrigin = "center center";
-  svg.style.willChange = "transform";
-  svg.style.cursor = "grab";
-  svg.style.touchAction = "none";
-
-  const state = { zoom: 1, x: 0, y: 0, dragging: false, pointerId: null, lastX: 0, lastY: 0, toolbar: null, readout: null };
-
-  const render = () => {
-    svg.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.zoom})`;
-    if (state.readout) state.readout.textContent = `${Math.round(state.zoom * 100)}%`;
-  };
-
-  const updateZoom = (nextZoom) => {
-    if (typeof nextZoom === "number") state.zoom = clamp(nextZoom);
-    render();
-  };
-
-  createToolbar(svg, state, updateZoom);
-  render();
-
-  const onWheel = (event) => {
-    event.preventDefault();
-    const direction = event.deltaY < 0 ? 1 : -1;
-    updateZoom(state.zoom + direction * STEP);
-  };
-
-  const onPointerDown = (event) => {
-    if (event.target !== svg) return;
-    state.dragging = true;
-    state.pointerId = event.pointerId;
-    state.lastX = event.clientX;
-    state.lastY = event.clientY;
-    svg.style.cursor = "grabbing";
-    svg.setPointerCapture?.(event.pointerId);
-  };
-
-  const onPointerMove = (event) => {
-    if (!state.dragging || event.pointerId !== state.pointerId) return;
-    state.x += event.clientX - state.lastX;
-    state.y += event.clientY - state.lastY;
-    state.lastX = event.clientX;
-    state.lastY = event.clientY;
-    render();
-  };
-
-  const stopDrag = (event) => {
-    if (event.pointerId != null && state.pointerId != null && event.pointerId !== state.pointerId) return;
-    state.dragging = false;
-    state.pointerId = null;
-    svg.style.cursor = "grab";
-  };
-
-  svg.addEventListener("wheel", onWheel, { passive: false });
-  svg.addEventListener("pointerdown", onPointerDown);
-  svg.addEventListener("pointermove", onPointerMove);
-  svg.addEventListener("pointerup", stopDrag);
-  svg.addEventListener("pointercancel", stopDrag);
-  svg.addEventListener("pointerleave", stopDrag);
-
-  const cleanup = () => {
-    svg.removeEventListener("wheel", onWheel);
-    svg.removeEventListener("pointerdown", onPointerDown);
-    svg.removeEventListener("pointermove", onPointerMove);
-    svg.removeEventListener("pointerup", stopDrag);
-    svg.removeEventListener("pointercancel", stopDrag);
-    svg.removeEventListener("pointerleave", stopDrag);
-    state.toolbar?.remove();
-    delete svg.dataset.topologyInteractive;
-  };
-
-  svg._netEscalateTopologyCleanup = cleanup;
-}
-
-export default function TopologyInteraction() {
-  const observerRef = useRef(null);
-
-  useEffect(() => {
-    const scan = () => document.querySelectorAll("svg").forEach(installOnSvg);
-    scan();
-
-    const observer = new MutationObserver(scan);
-    observer.observe(document.body, { childList: true, subtree: true });
-    observerRef.current = observer;
-
-    return () => {
-      observer.disconnect();
-      document.querySelectorAll("svg[data-topology-interactive=\"true\"]").forEach(svg => svg._netEscalateTopologyCleanup?.());
-      observerRef.current = null;
-    };
-  }, []);
-
-  return null;
-}
+const MIN_ZOOM=0.55,MAX_ZOOM=2.8,STEP=0.15,LAYOUT_KEY="netEscalate.topology.layout.v1";
+const clamp=v=>Math.min(MAX_ZOOM,Math.max(MIN_ZOOM,v));
+function isTopologySvg(svg){if(!svg)return false;const vb=svg.getAttribute("viewBox")||"",c=svg.getAttribute("class")||"";return vb.startsWith("0 0 1400 920")||c.includes("min-h-[560px]")||c.includes("min-h-[620px]")}
+function translateOf(g){const m=(g.getAttribute("transform")||"").match(/translate\(\s*([-\d.]+)[,\s]+([-\d.]+)\s*\)/);return m?{x:+m[1],y:+m[2]}:null}
+function sizeOf(g){const r=g.querySelector(":scope > rect");return{width:+r?.getAttribute("width")||150,height:+r?.getAttribute("height")||104}}
+function nodes(svg){return[...svg.querySelectorAll("g.cursor-pointer")].map(g=>{const p=translateOf(g);if(!p)return null;const s=sizeOf(g),t=g.querySelector(":scope > text"),key=(t?.textContent||g.textContent||"node").trim().replace(/\s+/g," ").slice(0,120);return{group:g,key,x:p.x+s.width/2,y:p.y+s.height/2,width:s.width,height:s.height}}).filter(Boolean)}
+function nearest(ns,x,y){let r=null,d=Infinity;ns.forEach(n=>{const q=Math.hypot(n.x-x,n.y-y);if(q<d){d=q;r=n}});return d<220?r:null}
+function reflow(svg){const ns=nodes(svg);if(!ns.length)return;svg.querySelectorAll("g").forEach(g=>{const p=g.querySelector(":scope > path");if(p){const m=(p.getAttribute("d")||"").match(/^M\s*([-\d.]+)\s+([-\d.]+)\s+C\s*[-\d.]+\s+[-\d.]+,\s*[-\d.]+\s+[-\d.]+,\s*([-\d.]+)\s+([-\d.]+)$/);if(!m)return;const a=nearest(ns,+m[1],+m[2]),b=nearest(ns,+m[3],+m[4]);if(!a||!b||a===b)return;const y=(a.y+b.y)/2,d=`M ${a.x} ${a.y} C ${a.x} ${y}, ${b.x} ${y}, ${b.x} ${b.y}`;g.querySelectorAll(":scope > path").forEach(x=>x.setAttribute("d",d));const r=g.querySelector(":scope > rect"),t=g.querySelector(":scope > text");if(r){r.setAttribute("x",(a.x+b.x)/2-72);r.setAttribute("y",y-12)}if(t){t.setAttribute("x",(a.x+b.x)/2);t.setAttribute("y",y+3)}return}const ls=g.querySelectorAll(":scope > line");if(ls.length<2)return;const f=ls[0],a=nearest(ns,+f.getAttribute("x1")+75,+f.getAttribute("y1")),b=nearest(ns,+f.getAttribute("x2")-75,+f.getAttribute("y2"));if(!a||!b||a===b)return;const x1=a.x+75,x2=b.x-75;ls.forEach(l=>{l.setAttribute("x1",x1);l.setAttribute("y1",a.y);l.setAttribute("x2",x2);l.setAttribute("y2",b.y)});const r=g.querySelector(":scope > rect"),t=g.querySelector(":scope > text"),x=(x1+x2)/2;if(r){r.setAttribute("x",x-38);r.setAttribute("y",a.y-34)}if(t){t.setAttribute("x",x);t.setAttribute("y",a.y-19)}})}
+function read(){try{return JSON.parse(localStorage.getItem(LAYOUT_KEY)||"{}")}catch{return{}}}
+function save(svg){const o={};nodes(svg).forEach(n=>o[n.key]={x:n.x,y:n.y});localStorage.setItem(LAYOUT_KEY,JSON.stringify(o))}
+function restore(svg){const o=read();nodes(svg).forEach(n=>{const p=o[n.key];if(p)n.group.setAttribute("transform",`translate(${p.x-n.width/2},${p.y-n.height/2})`)});reflow(svg)}
+function btn(label,title,click){const b=document.createElement("button");b.type="button";b.title=title;b.setAttribute("aria-label",title);b.textContent=label;b.className="inline-flex h-8 min-w-8 items-center justify-center rounded-lg border border-slate-700 bg-slate-900/90 px-2 text-[11px] font-bold text-slate-300 shadow-lg transition hover:border-blue-400/50 hover:bg-slate-800 hover:text-white";b.addEventListener("click",click);return b}
+function install(svg){if(!isTopologySvg(svg)||svg.dataset.topologyInteractive==="true")return;const host=svg.parentElement;if(!host)return;host.classList.add("relative");svg.dataset.topologyInteractive="true";svg.style.transformOrigin="center center";svg.style.touchAction="none";const s={zoom:1,x:0,y:0,pan:null,node:null};restore(svg);const render=z=>{if(typeof z==="number")s.zoom=clamp(z);svg.style.transform=`translate(${s.x}px,${s.y}px) scale(${s.zoom})`;if(s.readout)s.readout.textContent=`${Math.round(s.zoom*100)}%`};const bar=document.createElement("div");bar.dataset.topologyLayoutToolbar="true";bar.className="pointer-events-auto absolute right-4 top-4 z-30 flex items-center gap-1.5 rounded-xl border border-slate-700/80 bg-[#07101c]/95 p-1.5 shadow-2xl backdrop-blur-xl";const readout=document.createElement("span");readout.className="min-w-[48px] px-1 text-center font-mono text-[10px] font-semibold text-slate-400";bar.append(btn("−","Zoom out",()=>render(s.zoom-STEP)),readout,btn("+","Zoom in",()=>render(s.zoom+STEP)),btn("⛶","Reset view",()=>{s.x=0;s.y=0;render(1)}),btn("Save","Save custom layout",()=>save(svg)),btn("Auto","Restore generated layout",()=>{localStorage.removeItem(LAYOUT_KEY);window.location.reload()}));host.appendChild(bar);s.readout=readout;render();
+const point=e=>{const r=svg.getBoundingClientRect(),v=(svg.getAttribute("viewBox")||"0 0 1400 920").split(/\s+/).map(Number);return{x:(e.clientX-r.left)/r.width*v[2],y:(e.clientY-r.top)/r.height*v[3]}};
+const wheel=e=>{e.preventDefault();render(s.zoom+(e.deltaY<0?STEP:-STEP))};
+const down=e=>{const g=e.target.closest?.("g.cursor-pointer");if(g&&svg.contains(g)){e.preventDefault();e.stopPropagation();const p=translateOf(g),z=sizeOf(g),q=point(e);s.node={g,id:e.pointerId,sx:q.x,sy:q.y,ox:p.x,oy:p.y,z};g.style.cursor="grabbing";svg.setPointerCapture?.(e.pointerId);return}if(e.target!==svg)return;s.pan={id:e.pointerId,x:e.clientX,y:e.clientY};svg.style.cursor="grabbing";svg.setPointerCapture?.(e.pointerId)};
+const move=e=>{if(s.node?.id===e.pointerId){const q=point(e),n=s.node;n.g.setAttribute("transform",`translate(${n.ox+(q.x-n.sx)/s.zoom},${n.oy+(q.y-n.sy)/s.zoom})`);reflow(svg);return}if(!s.pan||s.pan.id!==e.pointerId)return;s.x+=e.clientX-s.pan.x;s.y+=e.clientY-s.pan.y;s.pan.x=e.clientX;s.pan.y=e.clientY;render()};
+const up=e=>{if(s.node?.id===e.pointerId){s.node.g.style.cursor="pointer";save(svg);s.node=null;return}s.pan=null;svg.style.cursor="grab"};
+svg.addEventListener("wheel",wheel,{passive:false});svg.addEventListener("pointerdown",down);svg.addEventListener("pointermove",move);svg.addEventListener("pointerup",up);svg.addEventListener("pointercancel",up);svg._netEscalateTopologyCleanup=()=>{svg.removeEventListener("wheel",wheel);svg.removeEventListener("pointerdown",down);svg.removeEventListener("pointermove",move);svg.removeEventListener("pointerup",up);svg.removeEventListener("pointercancel",up);bar.remove();delete svg.dataset.topologyInteractive}}
+export default function TopologyInteraction(){const observerRef=useRef(null);useEffect(()=>{const scan=()=>document.querySelectorAll("svg").forEach(install);scan();const observer=new MutationObserver(scan);observer.observe(document.body,{childList:true,subtree:true});observerRef.current=observer;return()=>{observer.disconnect();document.querySelectorAll('svg[data-topology-interactive="true"]').forEach(svg=>svg._netEscalateTopologyCleanup?.())}},[]);return null}
