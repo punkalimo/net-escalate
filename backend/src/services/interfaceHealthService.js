@@ -79,7 +79,7 @@ export function evaluateInterfaceHealth(metrics, status) {
 }
 
 async function generateUniqueIncidentId() {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
     const incidentId = `NET-${Math.floor(1000 + Math.random() * 9000)}`;
     const exists = await Incident.exists({ incidentId });
     if (!exists) return incidentId;
@@ -105,12 +105,12 @@ function fingerprintFor(device, iface, healthResult) {
 export async function syncInterfaceIncident({ device, iface, healthResult }) {
   const interfaceMetrics = iface.metrics || {};
   const currentIncidentId = interfaceMetrics.activeIncidentId || null;
-  const isHealthy = ["HEALTHY", "WARNING", "UNKNOWN"].includes(healthResult.health);
+  // UNKNOWN means we cannot prove recovery. Only a confirmed HEALTHY poll
+  // is allowed to release an outage latch.
+  const isRecovered = healthResult.health === "HEALTHY";
   const isFault = ["DOWN", "DEGRADED", "CRITICAL"].includes(healthResult.health);
 
-  // Only an actual interface recovery releases the latch. Resolving the
-  // incident in the UI does not mean the physical/network fault is fixed.
-  if (isHealthy) {
+  if (isRecovered) {
     if (currentIncidentId) {
       const resolved = await Incident.findOneAndUpdate(
         { incidentId: currentIncidentId, status: { $ne: "RESOLVED" } },
@@ -138,10 +138,8 @@ export async function syncInterfaceIncident({ device, iface, healthResult }) {
       return { incidentId: currentIncidentId, latch: true, recovered: false };
     }
 
-    // This also handles incidents created by the previous version, which did
-    // not have incidentLatched persisted on the interface. Once a fault has
-    // an associated incident, a manual RESOLVE must not cause another incident
-    // while the interface remains DOWN/DEGRADED/CRITICAL.
+    // A manual RESOLVE is not a physical recovery. Keep the latch until a
+    // later SNMP poll proves the interface is HEALTHY.
     if (current?.status === "RESOLVED" || interfaceMetrics.incidentLatched === true) {
       return { incidentId: currentIncidentId, latch: true, recovered: false };
     }
@@ -183,32 +181,42 @@ export async function syncInterfaceIncident({ device, iface, healthResult }) {
       return { incidentId: currentIncidentId, latch: false, recovered: false };
     }
 
-    const incidentId = await generateUniqueIncidentId();
-    const incident = await Incident.create({
-      incidentId,
-      device: `${device.hostname} / ${iface.name}`,
-      location: device.location || "Unknown location",
-      severity: healthResult.severity,
-      description: `Automatic interface health alert: ${healthResult.reasons.join(" ")}`,
-      technician: {
-        id: technician.technicianId,
-        name: technician.name,
-        phone: technician.phone
-      },
-      source: "INTERFACE_HEALTH",
-      fingerprint,
-      interfaceName: iface.name,
-      interfaceIndex: Number(iface.ifIndex)
-    });
+    const severity = healthResult.severity;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const incidentId = await generateUniqueIncidentId();
+      try {
+        const incident = await Incident.create({
+          incidentId,
+          device: `${device.hostname} / ${iface.name}`,
+          location: device.location || "Unknown location",
+          severity,
+          description: `Automatic interface health alert: ${healthResult.reasons.join(" ")}`,
+          technician: {
+            id: technician.technicianId,
+            name: technician.name,
+            phone: technician.phone
+          },
+          source: "INTERFACE_HEALTH",
+          fingerprint,
+          interfaceName: iface.name,
+          interfaceIndex: Number(iface.ifIndex)
+        });
 
-    if (global.io) global.io.emit("incident_created", incident);
+        if (global.io) global.io.emit("incident_created", incident);
 
-    const { processIncident } = await import("./incidentService.js");
-    processIncident(incident, global.io).catch(error => {
-      console.error(`[INTERFACE HEALTH] Escalation failed for ${incident.incidentId}: ${error.message}`);
-    });
+        const { processIncident } = await import("./incidentService.js");
+        processIncident(incident, global.io).catch(error => {
+          console.error(`[INTERFACE HEALTH] Escalation failed for ${incident.incidentId}: ${error.message}`);
+        });
 
-    return { incidentId: incident.incidentId, latch: true, recovered: false };
+        return { incidentId: incident.incidentId, latch: true, recovered: false };
+      } catch (createError) {
+        if (createError?.code !== 11000) throw createError;
+        console.warn(`[INTERFACE HEALTH] Incident ID collision for ${incidentId}; retrying.`);
+      }
+    }
+
+    throw new Error("Could not allocate a unique incident ID after multiple attempts.");
   } finally {
     incidentLocks.delete(lockKey);
   }
