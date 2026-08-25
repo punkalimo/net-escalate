@@ -39,17 +39,7 @@ function openDestination(id) {
   }
 
   if (id === "topology") {
-    const phase4 = document.querySelector('button[aria-label="Phase 4 Command Center"]');
-    phase4?.click();
-    window.setTimeout(() => {
-      const workspace = Array.from(document.querySelectorAll("button")).find(candidate => candidate.textContent?.trim() === "Topology workspace");
-      if (workspace) {
-        workspace.click();
-        return;
-      }
-      const topology = Array.from(document.querySelectorAll("button")).find(candidate => candidate.textContent?.trim() === "Topology");
-      topology?.click();
-    }, 0);
+    document.querySelector('button[title="Open Network Topology"]')?.click();
   }
 }
 
@@ -58,12 +48,23 @@ function NavigationBridge() {
   const [incidentCount, setIncidentCount] = useState(0);
 
   useEffect(() => {
+    let lastCount = null;
+
     const sync = () => {
       const buttons = Array.from(document.querySelectorAll("button"));
       const incident = buttons.find(button => button.textContent?.includes("Incidents"));
       const count = incident?.querySelector("span:last-child")?.textContent?.trim();
-      setIncidentCount(count && /^\d+$/.test(count) ? Number(count) : 0);
+      const nextCount = count && /^\d+$/.test(count) ? Number(count) : 0;
+
+      // NocDashboard and TopologyView can update the DOM frequently. Do not
+      // trigger a React render for every MutationObserver callback when the
+      // incident count has not actually changed.
+      if (nextCount !== lastCount) {
+        lastCount = nextCount;
+        setIncidentCount(nextCount);
+      }
     };
+
     sync();
     const observer = new MutationObserver(sync);
     observer.observe(document.body, { subtree: true, childList: true, characterData: true });
