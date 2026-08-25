@@ -44,6 +44,11 @@ const incidentSchema = new mongoose.Schema(
     fingerprint: { type: String, default: null, index: true },
     interfaceName: { type: String, default: null },
     interfaceIndex: { type: Number, default: null },
+    correlationGroupId: { type: String, default: null, index: true },
+    correlationRole: { type: String, enum: ["ROOT", "CHILD", "STANDALONE"], default: "STANDALONE" },
+    parentIncidentId: { type: String, default: null, index: true },
+    correlationConfidence: { type: Number, default: null, min: 0, max: 100 },
+    correlationEvidence: { type: [String], default: [] },
     escalationHistory: { type: [escalationHistorySchema], default: [] }
   },
   { timestamps: true }
