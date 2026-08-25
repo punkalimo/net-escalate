@@ -1,0 +1,197 @@
+import Device from "../models/Device.js";
+import {
+  discoverInterfaces,
+  getInterfaceMetrics
+} from "./snmpService.js";
+
+function toNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function calculateRate(current, previous, elapsedSeconds) {
+  if (
+    current == null ||
+    previous == null ||
+    !Number.isFinite(elapsedSeconds) ||
+    elapsedSeconds <= 0 ||
+    current < previous
+  ) {
+    return null;
+  }
+
+  return ((current - previous) * 8) / elapsedSeconds;
+}
+
+function calculateUtilization(inBps, outBps, speedMbps) {
+  if (
+    inBps == null ||
+    outBps == null ||
+    speedMbps == null ||
+    speedMbps <= 0
+  ) {
+    return null;
+  }
+
+  const capacityBps = speedMbps * 1_000_000;
+  return Math.min(
+    100,
+    ((Math.max(inBps, outBps)) / capacityBps) * 100
+  );
+}
+
+function mergeDiscoveredInterfaces(existing, discovered) {
+  const existingByName = new Map(
+    existing.map(item => [item.name, item])
+  );
+
+  return discovered.map(item => {
+    const current = existingByName.get(item.ifDescr);
+
+    return {
+      ...(current?.toObject ? current.toObject() : current || {}),
+      name: item.ifDescr || current?.name || `ifIndex-${item.ifIndex}`,
+      description:
+        current?.description || item.ifDescr || "",
+      ifIndex: item.ifIndex,
+      status:
+        item.ifOperStatus === 1
+          ? "UP"
+          : item.ifOperStatus === 2
+            ? "DOWN"
+            : "UNKNOWN"
+    };
+  });
+}
+
+export async function pollDeviceInterfaces(deviceId) {
+  const device = await Device.findOne({ deviceId });
+
+  if (!device) {
+    throw new Error("Device not found.");
+  }
+
+  if (!device.snmp?.enabled) {
+    return {
+      success: true,
+      skipped: true,
+      reason: "SNMP monitoring is disabled.",
+      device
+    };
+  }
+
+  let interfaces = Array.isArray(device.interfaces)
+    ? device.interfaces
+    : [];
+
+  const needsDiscovery =
+    interfaces.length === 0 ||
+    interfaces.some(item => !item.ifIndex);
+
+  if (needsDiscovery) {
+    const discovered = await discoverInterfaces(device);
+    interfaces = mergeDiscoveredInterfaces(
+      interfaces,
+      discovered
+    );
+    device.interfaces = interfaces;
+  }
+
+  const now = new Date();
+  const updatedInterfaces = [];
+
+  for (const item of device.interfaces) {
+    if (!item.ifIndex) {
+      updatedInterfaces.push(item);
+      continue;
+    }
+
+    try {
+      const metrics = await getInterfaceMetrics(
+        device,
+        Number(item.ifIndex)
+      );
+
+      const previousMetrics = item.metrics || null;
+      const previousCheckedAt = previousMetrics?.checkedAt
+        ? new Date(previousMetrics.checkedAt)
+        : null;
+
+      const elapsedSeconds = previousCheckedAt
+        ? (now.getTime() - previousCheckedAt.getTime()) / 1000
+        : null;
+
+      const inBps = calculateRate(
+        toNumber(metrics.inOctets),
+        toNumber(previousMetrics?.inOctets),
+        elapsedSeconds
+      );
+
+      const outBps = calculateRate(
+        toNumber(metrics.outOctets),
+        toNumber(previousMetrics?.outOctets),
+        elapsedSeconds
+      );
+
+      const updatedMetrics = {
+        ifIndex: metrics.ifIndex,
+        speedMbps: metrics.speedMbps,
+        speedSource: metrics.speedSource,
+        duplex: metrics.duplex,
+        inOctets: toNumber(metrics.inOctets) ?? 0,
+        outOctets: toNumber(metrics.outOctets) ?? 0,
+        inErrors: toNumber(metrics.inErrors) ?? 0,
+        outErrors: toNumber(metrics.outErrors) ?? 0,
+        inDiscards: toNumber(metrics.inDiscards) ?? 0,
+        outDiscards: toNumber(metrics.outDiscards) ?? 0,
+        inBps,
+        outBps,
+        utilizationPercent: calculateUtilization(
+          inBps,
+          outBps,
+          metrics.speedMbps
+        ),
+        sampleIntervalSeconds:
+          elapsedSeconds != null && elapsedSeconds > 0
+            ? elapsedSeconds
+            : null,
+        checkedAt: now
+      };
+
+      updatedInterfaces.push({
+        ...(item.toObject ? item.toObject() : item),
+        ifIndex: Number(item.ifIndex),
+        status:
+          metrics.operStatus === 1
+            ? "UP"
+            : metrics.operStatus === 2
+              ? "DOWN"
+              : "UNKNOWN",
+        metrics: updatedMetrics,
+        lastCheckedAt: now
+      });
+    } catch (error) {
+      updatedInterfaces.push({
+        ...(item.toObject ? item.toObject() : item),
+        lastCheckedAt: now
+      });
+
+      console.error(
+        `[INTERFACE MONITOR] ${device.hostname} ${item.name}: ${error.message}`
+      );
+    }
+  }
+
+  device.interfaces = updatedInterfaces;
+  await device.save();
+
+  return {
+    success: true,
+    skipped: false,
+    device
+  };
+}
+
+export default {
+  pollDeviceInterfaces
+};
