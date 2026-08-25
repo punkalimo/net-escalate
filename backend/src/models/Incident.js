@@ -54,4 +54,10 @@ const incidentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+incidentSchema.index({ status: 1, createdAt: -1 });
+incidentSchema.index({ status: 1, severity: 1, createdAt: -1 });
+incidentSchema.index({ device: 1, status: 1, createdAt: -1 });
+incidentSchema.index({ source: 1, status: 1, createdAt: -1 });
+incidentSchema.index({ correlationGroupId: 1, correlationRole: 1 });
+
 export default mongoose.model("Incident", incidentSchema);
