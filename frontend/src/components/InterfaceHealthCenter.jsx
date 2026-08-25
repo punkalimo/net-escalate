@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, AlertTriangle, RefreshCw, Server, Wifi, WifiOff } from "lucide-react";
+import { Activity, AlertTriangle, Cable, RefreshCw, Server, Wifi, WifiOff } from "lucide-react";
 import { io } from "socket.io-client";
-import { getDevices, getInterfaceHistory } from "../services/api";
+import { getDevices, getInterfaceHistory, discoverDeviceInterfaces } from "../services/api";
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 const healthStyles = {
@@ -81,23 +81,55 @@ export default function InterfaceHealthCenter() {
   const [samples, setSamples] = useState([]);
   const [loading, setLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
   const [error, setError] = useState("");
 
   const selectedDevice = devices.find(d => d.deviceId === deviceId);
   const interfaces = selectedDevice?.interfaces || [];
   const selectedInterface = interfaces.find(i => String(i.ifIndex) === String(ifIndex));
 
-  async function loadDevices() {
+  async function loadDevices({ keepSelection = true } = {}) {
     try {
       setLoading(true);
       setError("");
       const result = await getDevices();
       if (!result.success) throw new Error(result.message || "Failed to load devices.");
       setDevices(result.devices || []);
-      setDeviceId(current => current || result.devices?.[0]?.deviceId || "");
+      if (!keepSelection) setDeviceId("");
+      else setDeviceId(current => current || result.devices?.[0]?.deviceId || "");
     } catch (e) {
       setError(e.response?.data?.message || e.message || "Unable to reach the NetEscalate API.");
     } finally { setLoading(false); }
+  }
+
+  async function discoverSelectedDevice() {
+    if (!selectedDevice || discovering) return;
+    try {
+      setDiscovering(true);
+      setError("");
+      setSamples([]);
+      setIfIndex("");
+      const result = await discoverDeviceInterfaces(selectedDevice.deviceId);
+      if (!result.success) throw new Error(result.message || "Interface discovery failed.");
+
+      const discoveredInterfaces = Array.isArray(result.interfaces) ? result.interfaces : [];
+      setDevices(current => current.map(device => device.deviceId === selectedDevice.deviceId
+        ? { ...device, interfaces: discoveredInterfaces }
+        : device
+      ));
+
+      if (!discoveredInterfaces.length) {
+        setError("SNMP discovery completed but returned no interfaces. Verify SNMP is enabled and the community/credentials are correct.");
+        return;
+      }
+
+      setIfIndex(String(discoveredInterfaces[0].ifIndex));
+      await loadDevices();
+    } catch (e) {
+      setError(e.response?.data?.message || e.message || "Unable to discover interfaces. Check SNMP connectivity and credentials.");
+    } finally {
+      setDiscovering(false);
+    }
   }
 
   async function loadHistory() {
@@ -159,14 +191,16 @@ export default function InterfaceHealthCenter() {
     <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div><div className="flex items-center gap-2"><Activity size={18} className="text-blue-400"/><h2 className="text-lg font-semibold text-white">Interface Health & Slow-Link Detection</h2></div><p className="mt-1 text-xs text-slate-500">Live health scoring, congestion detection, historical utilization and error analysis.</p></div>
-        <button onClick={loadDevices} className="flex items-center justify-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs hover:bg-slate-800"><RefreshCw size={14}/>Refresh Devices</button>
+        <button onClick={() => loadDevices()} disabled={loading || discovering} className="flex items-center justify-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs hover:bg-slate-800 disabled:opacity-50"><RefreshCw size={14} className={loading ? "animate-spin" : ""}/>Refresh Devices</button>
       </div>
       {error && <div className="mt-4 rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-400">{error}</div>}
-      <div className="mt-5 grid gap-3 md:grid-cols-3">
-        <select value={deviceId} onChange={e => { setDeviceId(e.target.value); setIfIndex(""); }} className="form-input"><option value="">Select device</option>{devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.hostname} — {d.ipAddress}</option>)}</select>
-        <select value={ifIndex} onChange={e => setIfIndex(e.target.value)} disabled={!interfaces.length} className="form-input"><option value="">Select interface</option>{interfaces.map(i => <option key={i.ifIndex} value={i.ifIndex}>{i.name}</option>)}</select>
+      <div className="mt-5 grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
+        <select value={deviceId} onChange={e => { setDeviceId(e.target.value); setIfIndex(""); setSamples([]); }} className="form-input"><option value="">Select device</option>{devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.hostname} — {d.ipAddress}</option>)}</select>
+        <select value={ifIndex} onChange={e => setIfIndex(e.target.value)} disabled={!interfaces.length || discovering} className="form-input"><option value="">{interfaces.length ? "Select interface" : "No interfaces discovered"}</option>{interfaces.map(i => <option key={i.ifIndex} value={i.ifIndex}>{i.name}</option>)}</select>
         <select value={hours} onChange={e => setHours(Number(e.target.value))} className="form-input"><option value="1">Last 1 hour</option><option value="6">Last 6 hours</option><option value="24">Last 24 hours</option><option value="72">Last 3 days</option><option value="168">Last 7 days</option></select>
+        <button onClick={discoverSelectedDevice} disabled={!selectedDevice || discovering} title={interfaces.length ? "Refresh interfaces from the device" : "Fetch interfaces from the device"} className="flex items-center justify-center gap-2 rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-xs font-semibold text-blue-400 hover:bg-blue-500/20 disabled:cursor-not-allowed disabled:opacity-50"><Cable size={14} className={discovering ? "animate-pulse" : ""}/>{discovering ? "Fetching..." : interfaces.length ? "Refresh Interfaces" : "Fetch Interfaces"}</button>
       </div>
+      {selectedDevice && !interfaces.length && !discovering && <div className="mt-3 flex items-center justify-between gap-4 rounded-lg border border-blue-500/20 bg-blue-500/5 p-3 text-xs"><div><p className="font-medium text-blue-300">No interfaces are loaded for {selectedDevice.hostname}.</p><p className="mt-1 text-slate-500">Fetch them directly over SNMP to populate Interface Health and historical monitoring.</p></div><button onClick={discoverSelectedDevice} className="shrink-0 rounded-lg bg-blue-600 px-3 py-2 font-semibold text-white hover:bg-blue-500">Fetch now</button></div>}
 
       {!selectedDevice ? <div className="py-12 text-center text-sm text-slate-600">{loading ? "Loading devices..." : "Select a monitored device."}</div> : <>
         <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
