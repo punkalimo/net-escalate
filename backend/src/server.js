@@ -12,6 +12,7 @@ import deviceRoutes from "./routes/deviceRoutes.js";
 import interfaceRoutes from "./routes/interfaceRoutes.js";
 
 import { startAllDeviceMonitoring, setMonitoringSocket } from "./services/deviceMonitoringService.js";
+import { startAllInterfaceMonitoring } from "./services/interfaceMonitoringService.js";
 
 const app = express();
 
@@ -63,6 +64,7 @@ async function startServer() {
     console.log("MongoDB connected");
 
     await startAllDeviceMonitoring();
+    await startAllInterfaceMonitoring();
 
     httpServer.listen(PORT, () => {
       console.log(`NetEscalate API running on http://localhost:${PORT}`);
