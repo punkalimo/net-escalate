@@ -1,8 +1,7 @@
 import Device from "../models/Device.js";
-import {
-  discoverInterfaces,
-  getInterfaceMetrics
-} from "./snmpService.js";
+import InterfaceSample from "../models/InterfaceSample.js";
+import { discoverInterfaces, getInterfaceMetrics } from "./snmpService.js";
+import { evaluateInterfaceHealth, syncInterfaceIncident } from "./interfaceHealthService.js";
 
 const monitoringTimers = new Map();
 
@@ -12,83 +11,63 @@ function toNumber(value) {
 }
 
 function calculateRate(current, previous, elapsedSeconds) {
-  if (
-    current == null ||
-    previous == null ||
-    !Number.isFinite(elapsedSeconds) ||
-    elapsedSeconds <= 0 ||
-    current < previous
-  ) {
-    return null;
-  }
-
+  if (current == null || previous == null || !Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0 || current < previous) return null;
   return ((current - previous) * 8) / elapsedSeconds;
 }
 
 function calculateUtilization(inBps, outBps, speedMbps) {
-  if (
-    inBps == null ||
-    outBps == null ||
-    speedMbps == null ||
-    speedMbps <= 0
-  ) {
-    return null;
-  }
-
+  if (inBps == null || outBps == null || speedMbps == null || speedMbps <= 0) return null;
   const capacityBps = speedMbps * 1_000_000;
-  return Math.min(
-    100,
-    (Math.max(inBps, outBps) / capacityBps) * 100
-  );
+  return Math.min(100, (Math.max(inBps, outBps) / capacityBps) * 100);
 }
 
 function mergeDiscoveredInterfaces(existing, discovered) {
-  const existingByName = new Map(
-    existing.map(item => [item.name, item])
-  );
-
+  const existingByName = new Map(existing.map(item => [item.name, item]));
   return discovered.map(item => {
     const current = existingByName.get(item.ifDescr);
-
     return {
       ...(current?.toObject ? current.toObject() : current || {}),
       name: item.ifDescr || current?.name || `ifIndex-${item.ifIndex}`,
       description: current?.description || item.ifDescr || "",
       ifIndex: item.ifIndex,
-      status:
-        item.ifOperStatus === 1
-          ? "UP"
-          : item.ifOperStatus === 2
-            ? "DOWN"
-            : "UNKNOWN"
+      status: item.ifOperStatus === 1 ? "UP" : item.ifOperStatus === 2 ? "DOWN" : "UNKNOWN"
     };
+  });
+}
+
+async function saveSample(device, iface) {
+  const metrics = iface.metrics || {};
+  const sampledAt = metrics.checkedAt || new Date();
+  const expiresAt = new Date(new Date(sampledAt).getTime() + 7 * 24 * 60 * 60 * 1000);
+  await InterfaceSample.create({
+    deviceId: device.deviceId,
+    hostname: device.hostname,
+    ifIndex: Number(iface.ifIndex),
+    interfaceName: iface.name,
+    status: iface.status,
+    speedMbps: metrics.speedMbps,
+    inBps: metrics.inBps,
+    outBps: metrics.outBps,
+    utilizationPercent: metrics.utilizationPercent,
+    inErrors: metrics.inErrors || 0,
+    outErrors: metrics.outErrors || 0,
+    inDiscards: metrics.inDiscards || 0,
+    outDiscards: metrics.outDiscards || 0,
+    duplex: metrics.duplex || "UNKNOWN",
+    health: metrics.health || "UNKNOWN",
+    healthScore: metrics.healthScore,
+    sampledAt,
+    expiresAt
   });
 }
 
 export async function pollDeviceInterfaces(deviceId) {
   const device = await Device.findOne({ deviceId });
+  if (!device) throw new Error("Device not found.");
+  if (!device.snmp?.enabled) return { success: true, skipped: true, reason: "SNMP monitoring is disabled.", device };
 
-  if (!device) {
-    throw new Error("Device not found.");
-  }
-
-  if (!device.snmp?.enabled) {
-    return {
-      success: true,
-      skipped: true,
-      reason: "SNMP monitoring is disabled.",
-      device
-    };
-  }
-
-  let interfaces = Array.isArray(device.interfaces)
-    ? device.interfaces
-    : [];
-
-  const needsDiscovery =
-    interfaces.length === 0 ||
-    interfaces.some(item => !item.ifIndex);
-
+  let interfaces = Array.isArray(device.interfaces) ? device.interfaces : [];
+  const needsDiscovery = interfaces.length === 0 || interfaces.some(item => !item.ifIndex);
   if (needsDiscovery) {
     const discovered = await discoverInterfaces(device);
     interfaces = mergeDiscoveredInterfaces(interfaces, discovered);
@@ -105,170 +84,106 @@ export async function pollDeviceInterfaces(deviceId) {
     }
 
     try {
-      const metrics = await getInterfaceMetrics(
-        device,
-        Number(item.ifIndex)
-      );
-
+      const metrics = await getInterfaceMetrics(device, Number(item.ifIndex));
       const previousMetrics = item.metrics || null;
-      const previousCheckedAt = previousMetrics?.checkedAt
-        ? new Date(previousMetrics.checkedAt)
-        : null;
+      const previousCheckedAt = previousMetrics?.checkedAt ? new Date(previousMetrics.checkedAt) : null;
+      const elapsedSeconds = previousCheckedAt ? (now.getTime() - previousCheckedAt.getTime()) / 1000 : null;
+      const inOctets = toNumber(metrics.inOctets) ?? 0;
+      const outOctets = toNumber(metrics.outOctets) ?? 0;
+      const inBps = calculateRate(inOctets, toNumber(previousMetrics?.inOctets), elapsedSeconds);
+      const outBps = calculateRate(outOctets, toNumber(previousMetrics?.outOctets), elapsedSeconds);
+      const utilizationPercent = calculateUtilization(inBps, outBps, metrics.speedMbps);
+      const status = metrics.operStatus === 1 ? "UP" : metrics.operStatus === 2 ? "DOWN" : "UNKNOWN";
 
-      const elapsedSeconds = previousCheckedAt
-        ? (now.getTime() - previousCheckedAt.getTime()) / 1000
-        : null;
-
-      const inBps = calculateRate(
-        toNumber(metrics.inOctets),
-        toNumber(previousMetrics?.inOctets),
-        elapsedSeconds
-      );
-
-      const outBps = calculateRate(
-        toNumber(metrics.outOctets),
-        toNumber(previousMetrics?.outOctets),
-        elapsedSeconds
-      );
-
-      const updatedMetrics = {
+      const baseMetrics = {
         ifIndex: metrics.ifIndex,
         speedMbps: metrics.speedMbps,
         speedSource: metrics.speedSource,
         duplex: metrics.duplex,
-        inOctets: toNumber(metrics.inOctets) ?? 0,
-        outOctets: toNumber(metrics.outOctets) ?? 0,
+        inOctets,
+        outOctets,
         inErrors: toNumber(metrics.inErrors) ?? 0,
         outErrors: toNumber(metrics.outErrors) ?? 0,
         inDiscards: toNumber(metrics.inDiscards) ?? 0,
         outDiscards: toNumber(metrics.outDiscards) ?? 0,
         inBps,
         outBps,
-        utilizationPercent: calculateUtilization(
-          inBps,
-          outBps,
-          metrics.speedMbps
-        ),
-        sampleIntervalSeconds:
-          elapsedSeconds != null && elapsedSeconds > 0
-            ? elapsedSeconds
-            : null,
+        utilizationPercent,
+        sampleIntervalSeconds: elapsedSeconds != null && elapsedSeconds > 0 ? elapsedSeconds : null,
         checkedAt: now
       };
 
-      updatedInterfaces.push({
+      const healthResult = evaluateInterfaceHealth(baseMetrics, status);
+      let activeIncidentId = previousMetrics?.activeIncidentId || null;
+      const tempInterface = { ...(item.toObject ? item.toObject() : item), name: item.name, ifIndex: Number(item.ifIndex), status, metrics: { ...baseMetrics, ...healthResult } };
+
+      try {
+        const incidentId = await syncInterfaceIncident({ device, iface: tempInterface, healthResult });
+        if (incidentId) activeIncidentId = incidentId;
+        else if (["HEALTHY", "WARNING", "UNKNOWN"].includes(healthResult.health)) activeIncidentId = null;
+      } catch (incidentError) {
+        console.error(`[INTERFACE HEALTH] ${device.hostname} ${item.name}: ${incidentError.message}`);
+      }
+
+      const updatedMetrics = {
+        ...baseMetrics,
+        health: healthResult.health,
+        healthScore: healthResult.score,
+        healthReasons: healthResult.reasons,
+        activeIncidentId
+      };
+
+      const updatedInterface = {
         ...(item.toObject ? item.toObject() : item),
         ifIndex: Number(item.ifIndex),
-        status:
-          metrics.operStatus === 1
-            ? "UP"
-            : metrics.operStatus === 2
-              ? "DOWN"
-              : "UNKNOWN",
+        status,
         metrics: updatedMetrics,
         lastCheckedAt: now
-      });
-    } catch (error) {
-      updatedInterfaces.push({
-        ...(item.toObject ? item.toObject() : item),
-        lastCheckedAt: now
-      });
+      };
 
-      console.error(
-        `[INTERFACE MONITOR] ${device.hostname} ${item.name}: ${error.message}`
-      );
+      updatedInterfaces.push(updatedInterface);
+      await saveSample(device, updatedInterface);
+    } catch (error) {
+      updatedInterfaces.push({ ...(item.toObject ? item.toObject() : item), lastCheckedAt: now });
+      console.error(`[INTERFACE MONITOR] ${device.hostname} ${item.name}: ${error.message}`);
     }
   }
 
   device.interfaces = updatedInterfaces;
   await device.save();
-
-  if (global.io) {
-    global.io.emit("device_updated", device.toObject());
-  }
-
-  return {
-    success: true,
-    skipped: false,
-    device
-  };
+  if (global.io) global.io.emit("device_updated", device.toObject());
+  return { success: true, skipped: false, device };
 }
 
 export function stopInterfaceMonitoring(deviceId) {
   const timer = monitoringTimers.get(deviceId);
-
-  if (!timer) {
-    return;
-  }
-
+  if (!timer) return;
   clearInterval(timer);
   monitoringTimers.delete(deviceId);
 }
 
 export async function startInterfaceMonitoring(device) {
   stopInterfaceMonitoring(device.deviceId);
-
-  if (!device.monitoringEnabled || !device.snmp?.enabled) {
-    return;
-  }
-
-  const interval = Math.max(
-    5,
-    Number(device.pollingInterval || 30)
-  );
-
-  try {
-    await pollDeviceInterfaces(device.deviceId);
-  } catch (error) {
-    console.error(
-      `[INTERFACE MONITOR] Initial poll failed for ${device.hostname}: ${error.message}`
-    );
-  }
-
+  if (!device.monitoringEnabled || !device.snmp?.enabled) return;
+  const interval = Math.max(5, Number(device.pollingInterval || 30));
+  try { await pollDeviceInterfaces(device.deviceId); } catch (error) { console.error(`[INTERFACE MONITOR] Initial poll failed for ${device.hostname}: ${error.message}`); }
   const timer = setInterval(async () => {
-    try {
-      await pollDeviceInterfaces(device.deviceId);
-    } catch (error) {
-      console.error(
-        `[INTERFACE MONITOR] Poll failed for ${device.hostname}: ${error.message}`
-      );
-    }
+    try { await pollDeviceInterfaces(device.deviceId); }
+    catch (error) { console.error(`[INTERFACE MONITOR] Poll failed for ${device.hostname}: ${error.message}`); }
   }, interval * 1000);
-
   monitoringTimers.set(device.deviceId, timer);
-
-  console.log(
-    `[INTERFACE MONITOR] ${device.hostname} every ${interval}s`
-  );
+  console.log(`[INTERFACE MONITOR] ${device.hostname} every ${interval}s`);
 }
 
 export function stopAllInterfaceMonitoring() {
-  for (const deviceId of monitoringTimers.keys()) {
-    stopInterfaceMonitoring(deviceId);
-  }
+  for (const deviceId of monitoringTimers.keys()) stopInterfaceMonitoring(deviceId);
 }
 
 export async function startAllInterfaceMonitoring() {
-  const devices = await Device.find({
-    monitoringEnabled: true,
-    "snmp.enabled": true
-  });
-
-  for (const device of devices) {
-    await startInterfaceMonitoring(device);
-  }
-
-  console.log(
-    `[INTERFACE MONITOR] Started for ${devices.length} SNMP device(s).`
-  );
-
+  const devices = await Device.find({ monitoringEnabled: true, "snmp.enabled": true });
+  for (const device of devices) await startInterfaceMonitoring(device);
+  console.log(`[INTERFACE MONITOR] Started for ${devices.length} SNMP device(s).`);
   return devices.length;
 }
 
-export default {
-  pollDeviceInterfaces,
-  startInterfaceMonitoring,
-  stopInterfaceMonitoring,
-  startAllInterfaceMonitoring,
-  stopAllInterfaceMonitoring
-};
+export default { pollDeviceInterfaces, startInterfaceMonitoring, stopInterfaceMonitoring, startAllInterfaceMonitoring, stopAllInterfaceMonitoring };
