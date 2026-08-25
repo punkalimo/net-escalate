@@ -5,66 +5,23 @@ const API = import.meta.env.VITE_API_URL || "http://localhost:5000";
 const tabs = [["overview", "NOC", Activity], ["topology", "Topology", Network], ["correlation", "Correlation", GitBranch], ["rca", "Root Cause", ShieldAlert], ["health", "Health", Cable], ["analytics", "Analytics", TrendingUp], ["changes", "Config", History], ["automation", "Automation", Play], ["assistant", "AI Assist", Bot]];
 const tones = { blue: "border-blue-500/20 bg-blue-500/10 text-blue-300", green: "border-emerald-500/20 bg-emerald-500/10 text-emerald-300", amber: "border-amber-500/20 bg-amber-500/10 text-amber-300", red: "border-red-500/20 bg-red-500/10 text-red-300" };
 
-async function api(path, options = {}) {
-  const response = await fetch(`${API}${path}`, { headers: { "Content-Type": "application/json" }, ...options });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.message || `Request failed (${response.status})`);
-  return data;
-}
+async function api(path, options = {}) { const response = await fetch(`${API}${path}`, { headers: { "Content-Type": "application/json" }, ...options }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.message || `Request failed (${response.status})`); return data; }
 function Badge({ children, tone = "blue" }) { return <span className={`rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${tones[tone]}`}>{children}</span>; }
 function Metric({ label, value, tone = "blue" }) { const valueTone = tone === "red" ? "text-red-300" : tone === "green" ? "text-emerald-300" : tone === "amber" ? "text-amber-300" : "text-white"; return <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-[10px] uppercase tracking-[.18em] text-slate-600">{label}</p><p className={`mt-2 text-2xl font-bold ${valueTone}`}>{value}</p></div>; }
 function Card({ children, className = "" }) { return <section className={`rounded-2xl border border-slate-800/80 bg-slate-900/70 p-5 shadow-xl shadow-black/10 ${className}`}>{children}</section>; }
 
 export default function Phase4CommandCenter() {
   const [open, setOpen] = useState(false), [tab, setTab] = useState("overview"), [overview, setOverview] = useState(null), [data, setData] = useState(null), [busy, setBusy] = useState(false), [message, setMessage] = useState(""), [question, setQuestion] = useState("What should I investigate first?");
-
   const loadOverview = async () => { setBusy(true); try { setOverview(await api("/api/phase4/overview")); setMessage(""); } catch (error) { setMessage(error.message); } finally { setBusy(false); } };
   useEffect(() => { if (open && !overview) loadOverview(); }, [open, overview]);
-
-  const openWorkspace = type => {
-    setOpen(false);
-    window.dispatchEvent(new CustomEvent(`netescalate:open-${type}`));
-    if (type === "topology") {
-      setTimeout(() => {
-        const button = Array.from(document.querySelectorAll("button")).find(candidate => candidate.textContent?.trim() === "Topology");
-        button?.click();
-      }, 0);
-    }
-  };
-
-  const select = async next => {
-    setTab(next); setMessage("");
-    if (next === "topology") return;
-    if (!["analytics", "correlation", "rca", "changes"].includes(next)) return;
-    setBusy(true);
-    try {
-      const endpoint = next === "analytics" ? "/api/phase4/analytics?hours=24" : next === "correlation" ? "/api/incidents/correlation" : next === "rca" ? "/api/phase4/rca?refresh=true" : "/api/phase4/config-changes";
-      setData(await api(endpoint));
-    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
-  };
-
-  const action = async name => {
-    setBusy(true); setMessage("");
-    try {
-      const result = await api("/api/phase4/automation/run", { method: "POST", body: JSON.stringify({ action: name }) });
-      if (name === "correlate") setData(result.result);
-      setMessage(`${name === "correlate" ? "Incident correlation" : "Topology discovery"} completed.`);
-      await loadOverview();
-    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
-  };
-
-  const ask = async () => {
-    setBusy(true); setMessage("");
-    try { setData(await api("/api/phase4/assistant", { method: "POST", body: JSON.stringify({ question }) })); setTab("assistant"); }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
-  };
-
-  const k = overview?.kpis || {};
-  const groups = data?.groups || [];
-  const analyses = data?.analyses || [];
+  const openWorkspace = type => { setOpen(false); window.dispatchEvent(new CustomEvent(`netescalate:open-${type}`)); if (type === "topology") setTimeout(() => { const button = Array.from(document.querySelectorAll("button")).find(candidate => candidate.textContent?.trim() === "Topology"); button?.click(); }, 0); };
+  const select = async next => { setTab(next); setMessage(""); if (next === "topology") return; if (!["analytics", "correlation", "rca", "changes"].includes(next)) return; setBusy(true); try { const endpoint = next === "analytics" ? "/api/phase4/analytics?hours=24" : next === "correlation" ? "/api/incidents/correlation" : next === "rca" ? "/api/phase4/rca?refresh=true" : "/api/phase4/config-changes"; setData(await api(endpoint)); } catch (error) { setMessage(error.message); } finally { setBusy(false); } };
+  const action = async name => { setBusy(true); setMessage(""); try { const result = await api("/api/phase4/automation/run", { method: "POST", body: JSON.stringify({ action: name }) }); if (name === "correlate") setData(result.result); setMessage(`${name === "correlate" ? "Incident correlation" : "Topology discovery"} completed.`); await loadOverview(); } catch (error) { setMessage(error.message); } finally { setBusy(false); } };
+  const ask = async () => { setBusy(true); setMessage(""); try { setData(await api("/api/phase4/assistant", { method: "POST", body: JSON.stringify({ question }) })); setTab("assistant"); } catch (error) { setMessage(error.message); } finally { setBusy(false); } };
+  const k = overview?.kpis || {}, groups = data?.groups || [], analyses = data?.analyses || [];
 
   return <>
-    <button onClick={() => setOpen(true)} className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 inline-flex items-center gap-2 rounded-2xl border border-blue-400/20 bg-blue-600 px-4 py-3 text-xs font-bold text-white shadow-2xl shadow-blue-950/40 transition hover:-translate-y-0.5 hover:bg-blue-500" title="Open Phase 4 Operations Suite"><Sparkles size={15}/><span>Phase 4</span><span className="hidden sm:inline">Operations</span></button>
+    <button aria-label="Phase 4 Command Center" onClick={() => setOpen(true)} className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 inline-flex items-center gap-2 rounded-2xl border border-blue-400/20 bg-blue-600 px-4 py-3 text-xs font-bold text-white shadow-2xl shadow-blue-950/40 transition hover:-translate-y-0.5 hover:bg-blue-500" title="Open Phase 4 Operations Suite"><Sparkles size={15}/><span>Phase 4</span><span className="hidden sm:inline">Operations</span></button>
     {open && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/75 p-3 backdrop-blur-sm sm:p-6"><div className="flex h-[min(94vh,900px)] w-full max-w-[1500px] flex-col overflow-hidden rounded-3xl border border-slate-700 bg-[#060b14] shadow-2xl">
       <header className="flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-950/90 px-4 py-4 sm:px-5"><div className="flex min-w-0 items-center gap-3"><div className="rounded-xl bg-blue-600/15 p-2 text-blue-300"><Zap size={18}/></div><div className="min-w-0"><h2 className="truncate font-semibold text-white">Phase 4 Operations Suite</h2><p className="hidden text-[10px] uppercase tracking-[.2em] text-slate-600 sm:block">Network intelligence · performance · automation</p></div></div><div className="flex gap-2"><button onClick={loadOverview} title="Refresh overview" className="rounded-xl border border-slate-800 p-2 text-slate-400 hover:text-white"><RefreshCw size={16} className={busy ? "animate-spin" : ""}/></button><button onClick={() => setOpen(false)} title="Close" className="rounded-xl border border-slate-800 p-2 text-slate-400 hover:text-white"><X size={17}/></button></div></header>
       <div className="flex min-h-0 flex-1"><nav className="hidden w-56 shrink-0 overflow-y-auto border-r border-slate-800 bg-slate-950/50 p-3 md:block"><p className="px-3 pb-2 text-[9px] font-bold uppercase tracking-[.2em] text-slate-700">Operations</p>{tabs.map(([id, label, Icon]) => <button key={id} onClick={() => select(id)} className={`mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-xs font-semibold transition ${tab === id ? "bg-blue-500/10 text-blue-300 ring-1 ring-blue-500/20" : "text-slate-500 hover:bg-slate-800/50 hover:text-slate-200"}`}><Icon size={15}/>{label}</button>)}<div className="mt-5 rounded-xl border border-emerald-500/10 bg-emerald-500/5 p-3 text-[10px] leading-5 text-slate-500"><b className="text-emerald-300">SAFE AUTOMATION</b><br/>Discovery, correlation and snapshots only. No unattended device configuration changes.</div></nav>
