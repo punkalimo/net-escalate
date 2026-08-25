@@ -18,7 +18,9 @@ import {
   updateDevice,
   deleteDevice,
   testDevicePort,
-  testDeviceConnectivity
+  testDeviceConnectivity,
+  discoverDeviceInterfaces,
+  getDeviceInterfaces
 } from "./services/api";
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
@@ -153,10 +155,70 @@ function DeviceFormModal({ device, onClose, onSaved }) {
   </div>;
 }
 
+function formatRate(bitsPerSecond) {
+  if (bitsPerSecond == null || !Number.isFinite(bitsPerSecond)) return "—";
+  if (bitsPerSecond >= 1e9) return `${(bitsPerSecond / 1e9).toFixed(2)} Gbps`;
+  if (bitsPerSecond >= 1e6) return `${(bitsPerSecond / 1e6).toFixed(2)} Mbps`;
+  if (bitsPerSecond >= 1e3) return `${(bitsPerSecond / 1e3).toFixed(1)} Kbps`;
+  return `${Math.round(bitsPerSecond)} bps`;
+}
+
+function formatSpeed(speedMbps) {
+  if (speedMbps == null || !Number.isFinite(speedMbps)) return "N/A";
+  if (speedMbps >= 1000) return `${(speedMbps / 1000).toFixed(speedMbps % 1000 === 0 ? 0 : 2)} Gbps`;
+  return `${speedMbps} Mbps`;
+}
+
+function InterfaceMetrics({ item }) {
+  const metrics = item.metrics;
+  if (!metrics) return <p className="mt-3 text-xs text-slate-600">Performance metrics unavailable.</p>;
+  const totalErrors = (metrics.inErrors || 0) + (metrics.outErrors || 0);
+  const totalDiscards = (metrics.inDiscards || 0) + (metrics.outDiscards || 0);
+  return <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
+    <div><p className="text-slate-600">Speed</p><p className="mt-1 text-slate-300">{formatSpeed(metrics.speedMbps)}</p></div>
+    <div><p className="text-slate-600">Duplex</p><p className="mt-1 text-slate-300">{metrics.duplex || "UNKNOWN"}</p></div>
+    <div><p className="text-slate-600">In</p><p className="mt-1 text-slate-300">{formatRate(metrics.inBps)}</p></div>
+    <div><p className="text-slate-600">Out</p><p className="mt-1 text-slate-300">{formatRate(metrics.outBps)}</p></div>
+    <div><p className="text-slate-600">Utilization</p><p className="mt-1 font-semibold text-slate-300">{metrics.utilizationPercent == null ? "—" : `${metrics.utilizationPercent.toFixed(1)}%`}</p></div>
+    <div><p className="text-slate-600">Errors / Discards</p><p className={`mt-1 ${totalErrors || totalDiscards ? "text-orange-400" : "text-slate-300"}`}>{totalErrors} / {totalDiscards}</p></div>
+  </div>;
+}
+
 function DeviceDetails({ device, onClose, onEdit, onDelete, onRefresh }) {
   const [port, setPort] = useState("80");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [interfaces, setInterfaces] = useState(device.interfaces || []);
+  const [discovering, setDiscovering] = useState(false);
+  const [interfaceError, setInterfaceError] = useState(null);
+
+  useEffect(() => {
+    setInterfaces(device.interfaces || []);
+  }, [device.interfaces]);
+
+  async function loadInterfaces() {
+    try {
+      const result = await getDeviceInterfaces(device.deviceId);
+      if (result.success) setInterfaces(result.interfaces || []);
+    } catch (error) {
+      setInterfaceError(error.response?.data?.message || error.message || "Failed to load interfaces.");
+    }
+  }
+
+  async function discover() {
+    setDiscovering(true);
+    setInterfaceError(null);
+    try {
+      const result = await discoverDeviceInterfaces(device.deviceId);
+      if (!result.success) throw new Error(result.message || "Interface discovery failed.");
+      setInterfaces(result.interfaces || []);
+      if (onRefresh) await onRefresh();
+    } catch (error) {
+      setInterfaceError(error.response?.data?.message || error.message || "Failed to discover interfaces.");
+    } finally {
+      setDiscovering(false);
+    }
+  }
 
   async function runTest(connectivity = false) {
     setTesting(true); setTestResult(null);
@@ -168,7 +230,7 @@ function DeviceDetails({ device, onClose, onEdit, onDelete, onRefresh }) {
   }
 
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-    <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-xl border border-slate-800 bg-[#0d1420] shadow-2xl">
+    <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-xl border border-slate-800 bg-[#0d1420] shadow-2xl">
       <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
         <div className="flex items-center gap-3"><div className="rounded-lg bg-slate-800 p-2"><DeviceIcon type={device.deviceType}/></div><div><h3 className="font-semibold text-white">{device.hostname}</h3><p className="font-mono text-xs text-slate-500">{device.deviceId}</p></div></div>
         <div className="flex items-center gap-2"><button onClick={onEdit} className="flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs hover:bg-slate-800"><Pencil size={14}/>Edit</button><button onClick={onDelete} className="flex items-center gap-2 rounded-lg border border-red-500/30 px-3 py-2 text-xs text-red-400 hover:bg-red-500/10"><Trash2 size={14}/>Delete</button><button onClick={onClose} className="rounded-lg p-2 text-slate-500 hover:bg-slate-800 hover:text-white"><X size={20}/></button></div>
@@ -181,7 +243,11 @@ function DeviceDetails({ device, onClose, onEdit, onDelete, onRefresh }) {
           <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-5"><h4 className="font-semibold text-white">Device Status</h4><div className="mt-4 flex items-center justify-between"><DeviceStatusBadge status={device.status}/><span className="text-xs text-slate-600">Monitoring {device.monitoringEnabled ? "Enabled" : "Disabled"}</span></div><div className="mt-5 space-y-3"><div><p className="text-xs text-slate-600">Last poll</p><p className="mt-1 text-sm text-slate-300">{device.lastPollAt ? new Date(device.lastPollAt).toLocaleString() : "Never"}</p></div><div><p className="text-xs text-slate-600">Last seen</p><p className="mt-1 text-sm text-slate-300">{device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : "Never"}</p></div><div><p className="text-xs text-slate-600">Polling interval</p><p className="mt-1 text-sm text-slate-300">{device.pollingInterval || 30} seconds</p></div></div></div>
           <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-5"><h4 className="font-semibold text-white">Connectivity Test</h4><p className="mt-1 text-xs text-slate-600">Check whether a TCP service is available.</p><div className="mt-4 flex gap-2"><input type="number" min="1" max="65535" value={port} onChange={e=>setPort(e.target.value)} className="form-input"/><button onClick={()=>runTest(false)} disabled={testing} className="rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50">Test Port</button></div><button onClick={()=>runTest(true)} disabled={testing} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 px-4 py-2 text-sm hover:bg-slate-800 disabled:opacity-50"><Wifi size={15}/>Test Connectivity</button>{testResult && <div className="mt-4 rounded-lg border border-slate-800 bg-slate-900 p-4"><p className="text-xs text-slate-500">Test Result</p><p className={`mt-2 text-sm font-semibold ${testResult.result?.state === "OPEN" ? "text-green-400" : "text-red-400"}`}>{testResult.result?.state || testResult.message || "Unknown"}</p>{testResult.result?.message && <p className="mt-1 text-xs text-slate-500">{testResult.result.message}</p>}</div>}</div>
         </div>
-        <div className="mt-6 rounded-xl border border-slate-800 bg-slate-950/50 p-5"><h4 className="font-semibold text-white">Monitored Interfaces / Ports</h4><p className="mt-1 text-xs text-slate-600">Ports and interfaces currently known to NetEscalate.</p>{!Array.isArray(device.interfaces) || !device.interfaces.length ? <div className="mt-4 rounded-lg border border-dashed border-slate-800 p-6 text-center"><p className="text-sm text-slate-500">No interfaces have been discovered yet.</p></div> : <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{device.interfaces.map((item,index)=><div key={index} className="rounded-lg border border-slate-800 bg-slate-900 p-4"><div className="flex items-center justify-between"><span className="font-mono text-sm text-white">{item.name}</span><StatusBadge status={item.status}/></div>{item.description && <p className="mt-1 text-xs text-slate-500">{item.description}</p>}</div>)}</div>}</div>
+        <div className="mt-6 rounded-xl border border-slate-800 bg-slate-950/50 p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><h4 className="font-semibold text-white">Network Interfaces</h4><p className="mt-1 text-xs text-slate-600">Live SNMP status, negotiated speed, traffic and error counters.</p></div><button onClick={discover} disabled={discovering} className="flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-500 disabled:opacity-50"><RefreshCw size={14} className={discovering ? "animate-spin" : ""}/>{discovering ? "Discovering..." : interfaces.length ? "Refresh Interfaces" : "Discover Interfaces"}</button></div>
+          {interfaceError && <div className="mt-4 rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-400">{interfaceError}</div>}
+          {!interfaces.length ? <div className="mt-4 rounded-lg border border-dashed border-slate-800 p-6 text-center"><p className="text-sm text-slate-500">No interfaces have been discovered yet.</p></div> : <div className="mt-4 grid gap-3 md:grid-cols-2">{interfaces.map((item,index)=><div key={item.ifIndex || `${item.name}-${index}`} className="rounded-lg border border-slate-800 bg-slate-900 p-4"><div className="flex items-center justify-between gap-3"><span className="font-mono text-sm text-white">{item.name}</span><StatusBadge status={item.status}/></div>{item.description && <p className="mt-1 text-xs text-slate-500">{item.description}</p>}<InterfaceMetrics item={item}/></div>)}</div>}
+        </div>
       </div>
     </div>
   </div>;
