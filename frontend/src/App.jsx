@@ -39,17 +39,9 @@ function openDestination(id) {
   }
 
   if (id === "topology") {
-    const phase4 = document.querySelector('button[aria-label="Phase 4 Command Center"]');
-    phase4?.click();
-    window.setTimeout(() => {
-      const workspace = Array.from(document.querySelectorAll("button")).find(candidate => candidate.textContent?.trim() === "Topology workspace");
-      if (workspace) {
-        workspace.click();
-        return;
-      }
-      const topology = Array.from(document.querySelectorAll("button")).find(candidate => candidate.textContent?.trim() === "Topology");
-      topology?.click();
-    }, 0);
+    // Open the existing topology surface directly. Going through Phase 4 first
+    // caused two modal transitions and a visible flicker when the workspace opened.
+    document.querySelector('button[title="Open Network Topology"]')?.click();
   }
 }
 
