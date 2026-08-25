@@ -11,18 +11,19 @@ function clamp(value) {
 
 function isTopologySvg(svg) {
   if (!svg) return false;
+  const classes = svg.getAttribute("class") || "";
   const viewBox = svg.getAttribute("viewBox") || "";
-  return viewBox.startsWith("0 0 1400 920") || viewBox.startsWith("0 0 ");
+  return classes.includes("min-w-[1000px]") || classes.includes("min-w-[1100px]") || viewBox.startsWith("0 0 1400 920");
 }
 
-function makeButton(title, icon, onClick, disabled = false) {
+function makeButton(title, icon, onClick) {
   const button = document.createElement("button");
   button.type = "button";
   button.title = title;
   button.setAttribute("aria-label", title);
-  button.className = "inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700 bg-slate-900/90 text-slate-300 shadow-lg transition hover:border-slate-500 hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-40";
-  button.disabled = disabled;
+  button.className = "inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700 bg-slate-900/90 text-slate-300 shadow-lg transition hover:border-slate-500 hover:bg-slate-800 hover:text-white";
   button.appendChild(icon);
+  button.addEventListener("click", onClick);
   return button;
 }
 
@@ -51,7 +52,6 @@ function createToolbar(svg, state, update) {
 
   const readout = document.createElement("span");
   readout.className = "min-w-[52px] px-1 text-center font-mono text-[10px] font-semibold text-slate-400";
-  readout.dataset.topologyZoomReadout = "true";
 
   toolbar.append(zoomOut, readout, zoomIn, fit, reset);
   host.appendChild(toolbar);
@@ -143,11 +143,9 @@ export default function TopologyInteraction() {
   const observerRef = useRef(null);
 
   useEffect(() => {
-    const scan = () => {
-      document.querySelectorAll("svg[viewBox]").forEach(installOnSvg);
-    };
-
+    const scan = () => document.querySelectorAll("svg").forEach(installOnSvg);
     scan();
+
     const observer = new MutationObserver(scan);
     observer.observe(document.body, { childList: true, subtree: true });
     observerRef.current = observer;
