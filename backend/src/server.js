@@ -1,126 +1,42 @@
 import "dotenv/config";
-
 import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
 import { createServer } from "http";
 import { Server } from "socket.io";
-
 import incidentRoutes from "./routes/incidentRoutes.js";
 import technicianRoutes from "./routes/technicianRoutes.js";
 import deviceRoutes from "./routes/deviceRoutes.js";
 import interfaceRoutes from "./routes/interfaceRoutes.js";
 import topologyRoutes from "./routes/topologyRoutes.js";
 import devicePathRoutes from "./routes/devicePathRoutes.js";
-
+import phase4Routes from "./routes/phase4Routes.js";
 import { startAllDeviceMonitoring, setMonitoringSocket } from "./services/deviceMonitoringService.js";
 import { startAllInterfaceMonitoring } from "./services/interfaceMonitoringService.js";
-
 const app = express();
 const httpServer = createServer(app);
 const startedAt = Date.now();
-
-const io = new Server(httpServer, {
-  cors: {
-    origin: process.env.FRONTEND_URL || "*",
-    methods: ["GET", "POST", "PATCH", "DELETE"]
-  }
-});
-
+const io = new Server(httpServer, { cors: { origin: process.env.FRONTEND_URL || "*", methods: ["GET", "POST", "PATCH", "DELETE"] } });
 setMonitoringSocket(io);
 global.io = io;
-
 app.use(cors({ origin: process.env.FRONTEND_URL || "*" }));
 app.use(express.json({ limit: "1mb" }));
-
-app.get("/", (req, res) => {
-  res.json({ name: "NetEscalate AI", status: "online", uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000) });
-});
-
-app.get("/api/health", async (req, res) => {
-  const mongoReady = mongoose.connection.readyState === 1;
-  const payload = {
-    status: mongoReady ? "healthy" : "degraded",
-    service: "NetEscalate API",
-    database: mongoReady ? "connected" : "disconnected",
-    uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
-    timestamp: new Date().toISOString()
-  };
-  return res.status(mongoReady ? 200 : 503).json(payload);
-});
-
+app.get("/", (req, res) => res.json({ name: "NetEscalate AI", status: "online", uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000) }));
+app.get("/api/health", async (req, res) => { const mongoReady = mongoose.connection.readyState === 1; return res.status(mongoReady ? 200 : 503).json({ status: mongoReady ? "healthy" : "degraded", service: "NetEscalate API", database: mongoReady ? "connected" : "disconnected", uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), timestamp: new Date().toISOString() }); });
 app.use("/api/incidents", incidentRoutes(io));
 app.use("/api/technicians", technicianRoutes);
 app.use("/api/devices", deviceRoutes);
 app.use("/api/interfaces", interfaceRoutes);
 app.use("/api/topology", topologyRoutes);
 app.use("/api/topology", devicePathRoutes);
-
-io.on("connection", socket => {
-  console.log("Dashboard connected:", socket.id);
-  socket.on("disconnect", () => console.log("Dashboard disconnected:", socket.id));
-});
-
+app.use("/api/phase4", phase4Routes(io));
+io.on("connection", socket => { console.log("Dashboard connected:", socket.id); socket.on("disconnect", () => console.log("Dashboard disconnected:", socket.id)); });
 const PORT = process.env.PORT || 5000;
 let monitoringStarted = false;
-
-function startBackgroundMonitoring() {
-  if (monitoringStarted) return;
-  monitoringStarted = true;
-  Promise.allSettled([startAllDeviceMonitoring(), startAllInterfaceMonitoring()]).then(results => {
-    results.forEach((result, index) => {
-      const name = index === 0 ? "device monitoring" : "interface monitoring";
-      if (result.status === "fulfilled") console.log(`[STARTUP] ${name} initialized.`);
-      else console.error(`[STARTUP] ${name} failed:`, result.reason);
-    });
-  });
-}
-
-async function listen() {
-  await new Promise((resolve, reject) => {
-    const onError = error => {
-      httpServer.off("listening", onListening);
-      reject(error);
-    };
-    const onListening = () => {
-      httpServer.off("error", onError);
-      resolve();
-    };
-    httpServer.once("error", onError);
-    httpServer.once("listening", onListening);
-    httpServer.listen(PORT);
-  });
-}
-
-async function startServer() {
-  try {
-    if (!process.env.MONGODB_URI) throw new Error("MONGODB_URI is not configured.");
-    await mongoose.connect(process.env.MONGODB_URI);
-    console.log("MongoDB connected");
-
-    await listen();
-    console.log(`NetEscalate API running on http://localhost:${PORT}`);
-    console.log("[STARTUP] Dashboard/API ready; starting monitoring in background.");
-    startBackgroundMonitoring();
-  } catch (error) {
-    if (error?.code === "EADDRINUSE") {
-      console.error(`[STARTUP] Port ${PORT} is already in use. Stop the existing NetEscalate process or choose another PORT.`);
-    } else {
-      console.error("Failed to start server:", error);
-    }
-    process.exit(1);
-  }
-}
-
-async function shutdown(signal) {
-  console.log(`[SHUTDOWN] ${signal} received; closing server connections.`);
-  io.close();
-  await new Promise(resolve => httpServer.close(() => resolve()));
-  await mongoose.disconnect();
-  process.exit(0);
-}
-
+function startBackgroundMonitoring() { if (monitoringStarted) return; monitoringStarted = true; Promise.allSettled([startAllDeviceMonitoring(), startAllInterfaceMonitoring()]).then(results => results.forEach((result, index) => { const name = index === 0 ? "device monitoring" : "interface monitoring"; if (result.status === "fulfilled") console.log(`[STARTUP] ${name} initialized.`); else console.error(`[STARTUP] ${name} failed:`, result.reason); })); }
+async function listen() { await new Promise((resolve, reject) => { const onError = error => { httpServer.off("listening", onListening); reject(error); }; const onListening = () => { httpServer.off("error", onError); resolve(); }; httpServer.once("error", onError); httpServer.once("listening", onListening); httpServer.listen(PORT); }); }
+async function startServer() { try { if (!process.env.MONGODB_URI) throw new Error("MONGODB_URI is not configured."); await mongoose.connect(process.env.MONGODB_URI); console.log("MongoDB connected"); await listen(); console.log(`NetEscalate API running on http://localhost:${PORT}`); console.log("[STARTUP] Dashboard/API ready; starting monitoring in background."); startBackgroundMonitoring(); } catch (error) { if (error?.code === "EADDRINUSE") console.error(`[STARTUP] Port ${PORT} is already in use. Stop the existing NetEscalate process or choose another PORT.`); else console.error("Failed to start server:", error); process.exit(1); } }
+async function shutdown(signal) { console.log(`[SHUTDOWN] ${signal} received; closing server connections.`); io.close(); await new Promise(resolve => httpServer.close(() => resolve())); await mongoose.disconnect(); process.exit(0); }
 process.once("SIGINT", () => shutdown("SIGINT"));
 process.once("SIGTERM", () => shutdown("SIGTERM"));
-
 startServer();
