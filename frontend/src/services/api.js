@@ -12,6 +12,7 @@ export async function getTechnicians() { return (await api.get("/technicians")).
 export async function createTechnician(technician) { return (await api.post("/technicians", technician)).data; }
 export async function updateTechnician(technicianId, technician) { return (await api.patch(`/technicians/${technicianId}`, technician)).data; }
 export async function deleteTechnician(technicianId) { return (await api.delete(`/technicians/${technicianId}`)).data; }
+export async function getTechnicianCapability(technicianId) { return (await api.get(`/technicians/${technicianId}/capability`)).data; }
 export async function testTechnicianCall(technicianId, payload = {}) { return (await api.post(`/technicians/${technicianId}/test-call`, payload)).data; }
 export async function getDevices() { return (await api.get("/devices")).data; }
 export async function getDevice(deviceId) { return (await api.get(`/devices/${deviceId}`)).data; }
