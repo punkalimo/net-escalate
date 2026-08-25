@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Maximize2, Minus, Plus, RotateCcw, Move } from "lucide-react";
+import { Maximize2, Minus, Plus, RotateCcw } from "lucide-react";
 
 const MIN_ZOOM = 0.55;
 const MAX_ZOOM = 2.8;
@@ -55,7 +55,6 @@ function createToolbar(svg, state, update) {
 
   toolbar.append(zoomOut, readout, zoomIn, fit, reset);
   host.appendChild(toolbar);
-
   state.toolbar = toolbar;
   state.readout = readout;
 }
@@ -88,14 +87,12 @@ function installOnSvg(svg) {
   render();
 
   const onWheel = (event) => {
-    // Zoom only while the pointer is over the actual topology canvas.
     event.preventDefault();
     const direction = event.deltaY < 0 ? 1 : -1;
     updateZoom(state.zoom + direction * STEP);
   };
 
   const onPointerDown = (event) => {
-    // Clicking a node should still select it; only drag the SVG background.
     if (event.target !== svg) return;
     state.dragging = true;
     state.pointerId = event.pointerId;
