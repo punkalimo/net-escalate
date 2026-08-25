@@ -114,14 +114,34 @@ export async function pollDeviceInterfaces(deviceId) {
       };
 
       const healthResult = evaluateInterfaceHealth(baseMetrics, status);
-      let activeIncidentId = previousMetrics?.activeIncidentId || null;
-      const tempInterface = { ...(item.toObject ? item.toObject() : item), name: item.name, ifIndex: Number(item.ifIndex), status, metrics: { ...baseMetrics, ...healthResult } };
+      const previousIncidentId = previousMetrics?.activeIncidentId || null;
+      const previousLatched = previousMetrics?.incidentLatched === true;
+      const tempInterface = {
+        ...(item.toObject ? item.toObject() : item),
+        name: item.name,
+        ifIndex: Number(item.ifIndex),
+        status,
+        metrics: {
+          ...baseMetrics,
+          ...healthResult,
+          activeIncidentId: previousIncidentId,
+          incidentLatched: previousLatched
+        }
+      };
+
+      let activeIncidentId = previousIncidentId;
+      let incidentLatched = previousLatched;
 
       try {
-        const incidentId = await syncInterfaceIncident({ device, iface: tempInterface, healthResult });
-        if (incidentId) activeIncidentId = incidentId;
-        else if (["HEALTHY", "WARNING", "UNKNOWN"].includes(healthResult.health)) activeIncidentId = null;
+        const incidentResult = await syncInterfaceIncident({ device, iface: tempInterface, healthResult });
+        activeIncidentId = incidentResult?.incidentId || null;
+        incidentLatched = incidentResult?.latch === true;
       } catch (incidentError) {
+        // Keep the previous latch on an incident-processing error. A transient
+        // database/provider error must never cause the next poll to open a
+        // second incident for the same ongoing outage.
+        activeIncidentId = previousIncidentId;
+        incidentLatched = previousLatched;
         console.error(`[INTERFACE HEALTH] ${device.hostname} ${item.name}: ${incidentError.message}`);
       }
 
@@ -130,7 +150,8 @@ export async function pollDeviceInterfaces(deviceId) {
         health: healthResult.health,
         healthScore: healthResult.score,
         healthReasons: healthResult.reasons,
-        activeIncidentId
+        activeIncidentId,
+        incidentLatched
       };
 
       const updatedInterface = {
