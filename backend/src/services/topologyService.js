@@ -25,7 +25,7 @@ function safeClose(session) {
 
 function walk(device, oid) {
   const session = createSession(device);
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const rows = [];
     let settled = false;
     const finish = (error = null) => {
@@ -46,15 +46,36 @@ function walk(device, oid) {
   });
 }
 
-function groupRows(rows, root, columns) {
+function parseCdpRows(rows) {
   const grouped = new Map();
   for (const row of rows) {
     const parts = row.oid.split(".");
-    const column = Number(parts[parts.length - 2]);
-    const index = Number(parts[parts.length - 1]);
-    if (!Number.isFinite(column) || !Number.isFinite(index)) continue;
-    if (!grouped.has(index)) grouped.set(index, {});
-    if (columns[column]) grouped.get(index)[columns[column]] = row.value;
+    const column = Number(parts.at(-2));
+    const localIfIndex = Number(parts.at(-1 - 1));
+    const deviceIndex = Number(parts.at(-1));
+    if (!Number.isFinite(column) || !Number.isFinite(localIfIndex) || !Number.isFinite(deviceIndex)) continue;
+    const key = `${localIfIndex}:${deviceIndex}`;
+    if (!grouped.has(key)) grouped.set(key, { localIfIndex, deviceIndex });
+    const item = grouped.get(key);
+    const fields = { 1: "localIfIndex", 2: "deviceIndex", 3: "addressType", 4: "address", 5: "version", 6: "deviceId", 7: "remotePort", 8: "platform", 9: "capabilities", 11: "nativeVlan" };
+    if (fields[column]) item[fields[column]] = row.value;
+  }
+  return [...grouped.values()];
+}
+
+function parseLldpRows(rows) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const parts = row.oid.split(".");
+    const column = Number(parts.at(-3));
+    const localPortNum = Number(parts.at(-2));
+    const remoteIndex = Number(parts.at(-1));
+    if (!Number.isFinite(column) || !Number.isFinite(localPortNum) || !Number.isFinite(remoteIndex)) continue;
+    const key = `${localPortNum}:${remoteIndex}`;
+    if (!grouped.has(key)) grouped.set(key, { localPortNum, remoteIndex });
+    const item = grouped.get(key);
+    const fields = { 4: "chassisSubtype", 5: "chassisId", 6: "portSubtype", 7: "remotePort", 8: "remotePortDescription", 9: "remoteSystemName", 10: "remoteSystemDescription", 11: "capabilities" };
+    if (fields[column]) item[fields[column]] = row.value;
   }
   return [...grouped.values()];
 }
@@ -62,39 +83,35 @@ function groupRows(rows, root, columns) {
 async function discoverCdp(device, interfaceMap) {
   const result = await walk(device, OIDS.cdp);
   if (result.error) return { neighbors: [], error: result.error };
-  const rows = groupRows(result.rows, OIDS.cdp, {
-    1: "localIfIndex", 2: "deviceIndex", 3: "addressType", 4: "address",
-    5: "version", 6: "deviceId", 7: "remotePort", 8: "platform", 9: "capabilities",
-    11: "nativeVlan"
-  });
-  return { neighbors: rows.filter(r => r.deviceId).map(r => ({
-    protocol: "CDP",
-    localIfIndex: Number(r.localIfIndex),
-    localInterface: interfaceMap.get(Number(r.localIfIndex)) || `ifIndex ${r.localIfIndex}`,
-    remoteDevice: r.deviceId,
-    remoteInterface: r.remotePort || "",
-    platform: r.platform || "",
-    address: r.address || ""
-  })), error: null };
+  return {
+    neighbors: parseCdpRows(result.rows).filter(r => r.deviceId).map(r => ({
+      protocol: "CDP",
+      localIfIndex: Number(r.localIfIndex),
+      localInterface: interfaceMap.get(Number(r.localIfIndex)) || `ifIndex ${r.localIfIndex}`,
+      remoteDevice: r.deviceId,
+      remoteInterface: r.remotePort || "",
+      platform: r.platform || "",
+      address: r.address || ""
+    })),
+    error: null
+  };
 }
 
 async function discoverLldp(device, interfaceMap) {
   const result = await walk(device, OIDS.lldp);
   if (result.error) return { neighbors: [], error: result.error };
-  const rows = groupRows(result.rows, OIDS.lldp, {
-    4: "chassisSubtype", 5: "chassisId", 6: "portSubtype", 7: "remotePort",
-    8: "remotePortDescription", 9: "remoteSystemName", 10: "remoteSystemDescription",
-    11: "capabilities"
-  });
-  return { neighbors: rows.filter(r => r.remoteSystemName || r.chassisId).map(r => ({
-    protocol: "LLDP",
-    localIfIndex: null,
-    localInterface: "",
-    remoteDevice: r.remoteSystemName || r.chassisId,
-    remoteInterface: r.remotePortDescription || r.remotePort || "",
-    platform: r.remoteSystemDescription || "",
-    address: ""
-  })), error: null };
+  return {
+    neighbors: parseLldpRows(result.rows).filter(r => r.remoteSystemName || r.chassisId).map(r => ({
+      protocol: "LLDP",
+      localIfIndex: r.localPortNum,
+      localInterface: interfaceMap.get(Number(r.localPortNum)) || `port ${r.localPortNum}`,
+      remoteDevice: r.remoteSystemName || r.chassisId,
+      remoteInterface: r.remotePortDescription || r.remotePort || "",
+      platform: r.remoteSystemDescription || "",
+      address: ""
+    })),
+    error: null
+  };
 }
 
 function normalizeName(value) {
@@ -104,7 +121,10 @@ function normalizeName(value) {
 function findDeviceByNeighbor(devices, neighbor) {
   const target = normalizeName(neighbor.remoteDevice);
   if (!target) return null;
-  return devices.find(d => normalizeName(d.hostname) === target || normalizeName(d.deviceId) === target || normalizeName(d.ipAddress) === target || normalizeName(d.hostname).includes(target) || target.includes(normalizeName(d.hostname))) || null;
+  return devices.find(d => {
+    const candidates = [d.hostname, d.deviceId, d.ipAddress].map(normalizeName).filter(Boolean);
+    return candidates.some(candidate => candidate === target || candidate.includes(target) || target.includes(candidate));
+  }) || null;
 }
 
 export async function discoverTopology() {
@@ -161,14 +181,7 @@ export async function discoverTopology() {
     }
   }
 
-  return {
-    success: true,
-    generatedAt: new Date().toISOString(),
-    discovery: { nodes: nodes.length, links: edges.length },
-    nodes,
-    edges,
-    diagnostics
-  };
+  return { success: true, generatedAt: new Date().toISOString(), discovery: { nodes: nodes.length, links: edges.length }, nodes, edges, diagnostics };
 }
 
 export default { discoverTopology };
