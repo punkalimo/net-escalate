@@ -35,38 +35,54 @@ body {
   border-color: rgb(59 130 246);
 }
 
-/* Phase 4 launcher rail: RCA, Phase 4 and Topology form one vertical
-   command rail on the right edge instead of competing horizontally. */
+/* Primary navigation: keep the existing Lucide icons, but present the
+   destinations as lightweight links rather than floating/card buttons. */
+aside > div:nth-child(2) > button {
+  position: relative;
+  margin-bottom: 0.125rem !important;
+  min-height: 2.75rem;
+  border-radius: 0.5rem !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0.65rem 0.75rem !important;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+
+aside > div:nth-child(2) > button:hover {
+  background: rgb(30 41 59 / 0.38) !important;
+}
+
+aside > div:nth-child(2) > button:focus-visible {
+  outline: 2px solid rgb(59 130 246 / 0.65);
+  outline-offset: 2px;
+}
+
+/* Subtle active-link indicator while retaining the icon and label. */
+aside > div:nth-child(2) > button[class*="text-blue-400"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55rem;
+  bottom: 0.55rem;
+  width: 2px;
+  border-radius: 999px;
+  background: rgb(59 130 246);
+  box-shadow: 0 0 10px rgb(59 130 246 / 0.55);
+}
+
+/* Remove the old floating RCA / Phase 4 / Topology command rail. */
 button[title="Open Root Cause Analysis"],
 button[title="Open Phase 4 Operations Suite"],
 button[title="Open Network Topology"],
 button[title="Open Topology"] {
-  position: fixed !important;
-  right: 1rem !important;
-  bottom: auto !important;
-  left: auto !important;
-  z-index: 70 !important;
-  transform: translateY(-50%) !important;
-}
-
-button[title="Open Root Cause Analysis"] {
-  top: calc(50% - 88px) !important;
-}
-
-button[title="Open Phase 4 Operations Suite"] {
-  top: 50% !important;
-}
-
-button[title="Open Network Topology"],
-button[title="Open Topology"] {
-  top: calc(50% + 88px) !important;
+  position: static !important;
+  inset: auto !important;
+  transform: none !important;
 }
 
 @media (max-width: 640px) {
-  button[title="Open Root Cause Analysis"],
-  button[title="Open Phase 4 Operations Suite"],
-  button[title="Open Network Topology"],
-  button[title="Open Topology"] {
-    right: 0.75rem !important;
+  aside > div:nth-child(2) > button {
+    min-height: 2.625rem;
   }
 }
