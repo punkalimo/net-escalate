@@ -28,12 +28,47 @@ function speed(value) {
 }
 
 function MiniChart({ samples }) {
-  if (!samples.length) return <div className="flex h-32 items-center justify-center text-xs text-slate-600">No historical samples yet.</div>;
-  const values = samples.map(s => Math.max(0, Math.min(100, Number(s.utilizationPercent || 0))));
-  const max = Math.max(100, ...values);
-  return <div className="h-32 rounded-lg border border-slate-800 bg-slate-950/70 p-2">
-    <div className="flex h-full items-end gap-1">
-      {values.slice(-60).map((value, index) => <div key={`${index}-${value}`} title={`${value.toFixed(1)}%`} className="min-w-[3px] flex-1 rounded-t bg-blue-500/70" style={{ height: `${Math.max(2, value / max * 100)}%` }} />)}
+  const points = samples
+    .map(sample => ({
+      value: Number(sample.utilizationPercent),
+      at: sample.sampledAt || sample.checkedAt || sample.createdAt
+    }))
+    .filter(point => Number.isFinite(point.value));
+
+  if (!points.length) return <div className="flex h-40 items-center justify-center rounded-lg border border-slate-800 bg-slate-950/70 text-xs text-slate-600">No utilization values have been recorded yet.</div>;
+
+  const width = 900;
+  const height = 150;
+  const padX = 10;
+  const padY = 10;
+  const max = Math.max(1, ...points.map(point => point.value));
+  const min = Math.min(0, ...points.map(point => point.value));
+  const range = Math.max(1, max - min);
+  const path = points.map((point, index) => {
+    const x = padX + (index / Math.max(1, points.length - 1)) * (width - padX * 2);
+    const y = height - padY - ((point.value - min) / range) * (height - padY * 2);
+    return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+  }).join(" ");
+
+  const latest = points[points.length - 1];
+  const peak = Math.max(...points.map(point => point.value));
+  const average = points.reduce((sum, point) => sum + point.value, 0) / points.length;
+
+  return <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+    <div className="relative h-40 w-full overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 flex flex-col justify-between text-[10px] text-slate-700">
+        <span>{max.toFixed(1)}%</span><span>{(max * 0.5).toFixed(1)}%</span><span>0%</span>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className="absolute inset-0 h-full w-full pl-8">
+        <line x1={padX} y1={height - padY} x2={width - padX} y2={height - padY} stroke="currentColor" className="text-slate-800" />
+        <line x1={padX} y1={height / 2} x2={width - padX} y2={height / 2} stroke="currentColor" strokeDasharray="4 6" className="text-slate-900" />
+        <path d={path} fill="none" stroke="currentColor" strokeWidth="3" vectorEffect="non-scaling-stroke" className="text-blue-400" />
+      </svg>
+    </div>
+    <div className="mt-2 flex items-center justify-between text-[11px] text-slate-600">
+      <span>{points[0].at ? new Date(points[0].at).toLocaleTimeString() : "Start"}</span>
+      <span>Latest {latest.value.toFixed(2)}% · Peak {peak.toFixed(2)}% · Avg {average.toFixed(2)}%</span>
+      <span>{latest.at ? new Date(latest.at).toLocaleTimeString() : "Now"}</span>
     </div>
   </div>;
 }
@@ -55,28 +90,38 @@ export default function InterfaceHealthCenter() {
   async function loadDevices() {
     try {
       setLoading(true);
+      setError("");
       const result = await getDevices();
-      if (result.success) {
-        setDevices(result.devices || []);
-        setDeviceId(current => current || result.devices?.[0]?.deviceId || "");
-      }
-    } catch (e) { setError(e.message || "Failed to load devices."); }
-    finally { setLoading(false); }
+      if (!result.success) throw new Error(result.message || "Failed to load devices.");
+      setDevices(result.devices || []);
+      setDeviceId(current => current || result.devices?.[0]?.deviceId || "");
+    } catch (e) {
+      setError(e.response?.data?.message || e.message || "Unable to reach the NetEscalate API.");
+    } finally { setLoading(false); }
   }
 
   async function loadHistory() {
-    if (!deviceId) return;
+    if (!deviceId || !ifIndex) {
+      setSamples([]);
+      return;
+    }
     try {
       setHistoryLoading(true);
-      const result = await getInterfaceHistory(deviceId, ifIndex || null, hours);
-      if (result.success) setSamples(result.samples || []);
-    } catch (e) { setError(e.message || "Failed to load interface history."); }
-    finally { setHistoryLoading(false); }
+      setError("");
+      const result = await getInterfaceHistory(deviceId, ifIndex, hours);
+      if (!result.success) throw new Error(result.message || "Failed to load interface history.");
+      setSamples(Array.isArray(result.samples) ? result.samples : []);
+    } catch (e) {
+      setSamples([]);
+      setError(e.response?.data?.message || e.message || "Unable to load interface history.");
+    } finally { setHistoryLoading(false); }
   }
 
   useEffect(() => { loadDevices(); }, []);
   useEffect(() => {
-    if (selectedDevice && !ifIndex && interfaces.length) setIfIndex(String(interfaces[0].ifIndex));
+    if (selectedDevice && (!ifIndex || !interfaces.some(i => String(i.ifIndex) === String(ifIndex))) && interfaces.length) {
+      setIfIndex(String(interfaces[0].ifIndex));
+    }
   }, [selectedDevice, ifIndex, interfaces]);
   useEffect(() => { loadHistory(); }, [deviceId, ifIndex, hours]);
   useEffect(() => {
@@ -94,9 +139,6 @@ export default function InterfaceHealthCenter() {
   const sampleAgeSeconds = latestCheckedAt ? (Date.now() - new Date(latestCheckedAt).getTime()) / 1000 : Infinity;
   const stale = !Number.isFinite(sampleAgeSeconds) || sampleAgeSeconds > Math.max(pollingSeconds * 3, 120);
 
-  // A parent-device outage must never be displayed as a healthy interface just
-  // because the interface's last successful SNMP sample was UP. Likewise, an
-  // old sample is UNKNOWN rather than pretending it is still current.
   const effectiveHealth = selectedDevice?.status === "DOWN"
     ? "DOWN"
     : stale
@@ -109,8 +151,9 @@ export default function InterfaceHealthCenter() {
       ? `No fresh SNMP interface sample has been received for ${Number.isFinite(sampleAgeSeconds) ? Math.round(sampleAgeSeconds) : "an unknown number of"} seconds.`
       : selectedInterface?.metrics?.healthReasons?.join(" ") || "No active health warning.";
 
-  const maxUtilization = useMemo(() => Math.max(0, ...samples.map(s => Number(s.utilizationPercent || 0))), [samples]);
-  const avgUtilization = useMemo(() => samples.length ? samples.reduce((sum, s) => sum + Number(s.utilizationPercent || 0), 0) / samples.length : 0, [samples]);
+  const utilizationValues = useMemo(() => samples.map(s => Number(s.utilizationPercent)).filter(Number.isFinite), [samples]);
+  const maxUtilization = useMemo(() => utilizationValues.length ? Math.max(...utilizationValues) : 0, [utilizationValues]);
+  const avgUtilization = useMemo(() => utilizationValues.length ? utilizationValues.reduce((sum, value) => sum + value, 0) / utilizationValues.length : 0, [utilizationValues]);
 
   return <section className="mx-auto max-w-[1600px] px-6 pb-8">
     <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
@@ -134,7 +177,7 @@ export default function InterfaceHealthCenter() {
         </div>
 
         <div className="mt-5 grid gap-5 lg:grid-cols-[2fr_1fr]">
-          <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4"><div className="mb-3 flex items-center justify-between"><div><h3 className="text-sm font-semibold text-white">Utilization History</h3><p className="text-xs text-slate-600">{samples.length} samples · {hours}h window</p></div>{historyLoading && <RefreshCw size={14} className="animate-spin text-slate-500"/>}</div><MiniChart samples={samples}/><div className="mt-3 grid grid-cols-2 gap-3 text-xs"><div><span className="text-slate-600">Average</span><p className="mt-1 text-slate-300">{avgUtilization.toFixed(1)}%</p></div><div><span className="text-slate-600">Peak</span><p className="mt-1 text-slate-300">{maxUtilization.toFixed(1)}%</p></div></div></div>
+          <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4"><div className="mb-3 flex items-center justify-between"><div><h3 className="text-sm font-semibold text-white">Utilization History</h3><p className="text-xs text-slate-600">{samples.length} samples · {hours}h window</p></div>{historyLoading && <RefreshCw size={14} className="animate-spin text-slate-500"/>}</div><MiniChart samples={samples}/><div className="mt-3 grid grid-cols-2 gap-3 text-xs"><div><span className="text-slate-600">Average</span><p className="mt-1 text-slate-300">{avgUtilization.toFixed(2)}%</p></div><div><span className="text-slate-600">Peak</span><p className="mt-1 text-slate-300">{maxUtilization.toFixed(2)}%</p></div></div></div>
           <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4"><h3 className="text-sm font-semibold text-white">Troubleshooting Signals</h3><div className="mt-4 space-y-3 text-xs"><div className="flex justify-between"><span className="text-slate-600">Errors</span><span className="text-slate-300">{(latest?.inErrors || 0) + (latest?.outErrors || 0)}</span></div><div className="flex justify-between"><span className="text-slate-600">Discards</span><span className="text-slate-300">{(latest?.inDiscards || 0) + (latest?.outDiscards || 0)}</span></div><div className="flex justify-between"><span className="text-slate-600">Duplex</span><span className="text-slate-300">{latest?.duplex || "UNKNOWN"}</span></div><div className="flex justify-between"><span className="text-slate-600">Sample interval</span><span className="text-slate-300">{latest?.sampleIntervalSeconds ? `${Number(latest.sampleIntervalSeconds).toFixed(1)}s` : "—"}</span></div><div className="mt-4 border-t border-slate-800 pt-3 text-slate-500"><AlertTriangle size={14} className="mb-2 text-orange-400"/>{healthReason}</div></div></div>
         </div>
 
