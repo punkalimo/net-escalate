@@ -14,12 +14,32 @@ router.post("/:deviceId/discover", async (req, res) => {
 
     const discovered = await discoverInterfaces(device);
 
-    const interfaces = discovered.map((item) => ({
-      name: item.ifDescr || `Interface ${item.ifIndex}`,
-      description: item.ifDescr || "",
-      status: item.ifOperStatus === 1 ? "UP" : item.ifOperStatus === 2 ? "DOWN" : "UNKNOWN",
-      lastCheckedAt: new Date()
-    }));
+    // Resolve operational state with explicit ifAdminStatus/ifOperStatus
+    // queries. This keeps interface discovery separate from status polling
+    // and avoids relying on the table walk to populate status values.
+    const interfaces = await Promise.all(
+      discovered.map(async (item) => {
+        let status = "UNKNOWN";
+
+        try {
+          const state = await getInterfaceStatus(device, item.ifIndex);
+          status = state.operState || "UNKNOWN";
+        } catch (statusError) {
+          console.warn(
+            `INTERFACE STATUS ERROR for ${item.ifDescr || item.ifIndex}:`,
+            statusError.message
+          );
+        }
+
+        return {
+          name: item.ifDescr || `Interface ${item.ifIndex}`,
+          description: item.ifDescr || "",
+          ipAddress: "",
+          status,
+          lastCheckedAt: new Date()
+        };
+      })
+    );
 
     device.interfaces = interfaces;
     await device.save();
