@@ -137,9 +137,6 @@ export async function pollDeviceInterfaces(deviceId) {
         activeIncidentId = incidentResult?.incidentId || null;
         incidentLatched = incidentResult?.latch === true;
       } catch (incidentError) {
-        // Keep the previous latch on an incident-processing error. A transient
-        // database/provider error must never cause the next poll to open a
-        // second incident for the same ongoing outage.
         activeIncidentId = previousIncidentId;
         incidentLatched = previousLatched;
         console.error(`[INTERFACE HEALTH] ${device.hostname} ${item.name}: ${incidentError.message}`);
@@ -165,7 +162,43 @@ export async function pollDeviceInterfaces(deviceId) {
       updatedInterfaces.push(updatedInterface);
       await saveSample(device, updatedInterface);
     } catch (error) {
-      updatedInterfaces.push({ ...(item.toObject ? item.toObject() : item), lastCheckedAt: now });
+      // Never leave the previous HEALTHY/UP state visible after a failed poll.
+      // If the parent device is already DOWN, the interface is effectively down
+      // from the monitoring system's perspective; otherwise its state is UNKNOWN.
+      const fallbackStatus = device.status === "DOWN" ? "DOWN" : "UNKNOWN";
+      const previousMetrics = item.metrics || {};
+      const fallbackMetrics = {
+        ...previousMetrics,
+        ifIndex: Number(item.ifIndex),
+        inBps: null,
+        outBps: null,
+        utilizationPercent: null,
+        checkedAt: now,
+        health: fallbackStatus === "DOWN" ? "DOWN" : "UNKNOWN",
+        healthScore: fallbackStatus === "DOWN" ? 0 : null,
+        healthReasons: [
+          fallbackStatus === "DOWN"
+            ? "Parent device is DOWN; interface state cannot be independently polled."
+            : `SNMP interface poll failed: ${error.message}`
+        ],
+        activeIncidentId: previousMetrics.activeIncidentId || null,
+        incidentLatched: previousMetrics.incidentLatched === true
+      };
+
+      const fallbackInterface = {
+        ...(item.toObject ? item.toObject() : item),
+        ifIndex: Number(item.ifIndex),
+        status: fallbackStatus,
+        metrics: fallbackMetrics,
+        lastCheckedAt: now
+      };
+
+      updatedInterfaces.push(fallbackInterface);
+      try {
+        await saveSample(device, fallbackInterface);
+      } catch (sampleError) {
+        console.error(`[INTERFACE MONITOR] Failed to save fallback sample for ${device.hostname} ${item.name}: ${sampleError.message}`);
+      }
       console.error(`[INTERFACE MONITOR] ${device.hostname} ${item.name}: ${error.message}`);
     }
   }
