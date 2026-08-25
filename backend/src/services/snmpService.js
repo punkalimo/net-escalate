@@ -1,7 +1,7 @@
 import snmp from "net-snmp";
 
 const DEFAULT_TIMEOUT = 5000;
-const DEFAULT_RETRIES = 1;
+const DEFAULT_RETRIES = 2;
 
 function normaliseSnmpVersion(value) {
   const version = String(value ?? "2c").toLowerCase();
@@ -38,45 +38,47 @@ function securityLevel(value) {
   return levels[level];
 }
 
+function createCommonOptions(device) {
+  const timeout = Math.max(1000, Number(device.snmp?.timeout || DEFAULT_TIMEOUT));
+  const retries = Number.isInteger(device.snmp?.retries) ? Math.max(0, device.snmp.retries) : DEFAULT_RETRIES;
+  return {
+    timeout,
+    retries,
+    transport: "udp4",
+    port: Number(device.snmp?.port || 161),
+    backoff: 1.2
+  };
+}
+
 function createSnmpSession(device) {
   if (!device) throw new Error("Device information is required.");
   if (!device.ipAddress) throw new Error("Device IP address is required.");
 
   const version = normaliseSnmpVersion(device.snmp?.version);
-  const timeout = Number(device.snmp?.timeout || DEFAULT_TIMEOUT);
-  const retries = Number.isInteger(device.snmp?.retries) ? device.snmp.retries : DEFAULT_RETRIES;
+  const options = createCommonOptions(device);
 
   if (version === "1") {
     return snmp.createSession(device.ipAddress, device.snmp?.community || "public", {
-      version: snmp.Version1,
-      timeout,
-      retries
+      ...options, version: snmp.Version1
     });
   }
 
   if (version === "2c") {
     return snmp.createSession(device.ipAddress, device.snmp?.community || "public", {
-      version: snmp.Version2c,
-      timeout,
-      retries
+      ...options, version: snmp.Version2c
     });
   }
 
   const username = String(device.snmp?.username || "").trim();
   if (!username) throw new Error("SNMPv3 username is required.");
-
   const levelName = device.snmp?.securityLevel || "noAuthNoPriv";
-  const user = {
-    name: username,
-    level: securityLevel(levelName)
-  };
+  const user = { name: username, level: securityLevel(levelName) };
 
   if (levelName === "authNoPriv" || levelName === "authPriv") {
     if (!device.snmp?.authKey) throw new Error("SNMPv3 authentication key is required.");
     user.authProtocol = authProtocol(device.snmp.authProtocol);
     user.authKey = String(device.snmp.authKey);
   }
-
   if (levelName === "authPriv") {
     if (!device.snmp?.privKey) throw new Error("SNMPv3 privacy key is required.");
     user.privProtocol = privProtocol(device.snmp.privProtocol);
@@ -84,79 +86,36 @@ function createSnmpSession(device) {
   }
 
   return snmp.createV3Session(device.ipAddress, user, {
-    timeout,
-    retries,
-    context: String(device.snmp?.context || "")
+    ...options, context: String(device.snmp?.context || "")
   });
 }
 
 function safeClose(session) {
   if (!session || typeof session.close !== "function") return;
-  try {
-    session.close();
-  } catch (error) {
-    if (error?.code !== "ERR_SOCKET_DGRAM_NOT_RUNNING") {
-      console.warn(`[SNMP] Session cleanup warning: ${error.message}`);
-    }
+  try { session.close(); } catch (error) {
+    if (error?.code !== "ERR_SOCKET_DGRAM_NOT_RUNNING") console.warn(`[SNMP] Session cleanup warning: ${error.message}`);
   }
-}
-
-function walkSubtree(session, oid, onVarbind) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = error => {
-      if (settled) return;
-      settled = true;
-      if (error) reject(error);
-      else resolve();
-    };
-
-    try {
-      session.subtree(
-        oid,
-        20,
-        varbinds => {
-          for (const varbind of varbinds || []) {
-            if (!snmp.isVarbindError(varbind)) onVarbind(varbind);
-          }
-        },
-        finish
-      );
-    } catch (error) {
-      finish(error);
-    }
-  });
 }
 
 export async function testSnmpConnection(device) {
   const session = createSnmpSession(device);
-  const oids = [
-    "1.3.6.1.2.1.1.1.0",
-    "1.3.6.1.2.1.1.3.0",
-    "1.3.6.1.2.1.1.4.0",
-    "1.3.6.1.2.1.1.5.0",
-    "1.3.6.1.2.1.1.6.0",
-    "1.3.6.1.2.1.1.7.0"
-  ];
-
+  const oid = "1.3.6.1.2.1.1.5.0";
   return new Promise((resolve, reject) => {
-    session.get(oids, (error, varbinds) => {
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
       safeClose(session);
-      if (error) return reject(error);
-      const information = {};
-      for (const varbind of varbinds || []) {
-        if (snmp.isVarbindError(varbind)) continue;
-        switch (varbind.oid) {
-          case "1.3.6.1.2.1.1.1.0": information.sysDescr = String(varbind.value); break;
-          case "1.3.6.1.2.1.1.3.0": information.sysUpTime = String(varbind.value); break;
-          case "1.3.6.1.2.1.1.4.0": information.sysContact = String(varbind.value); break;
-          case "1.3.6.1.2.1.1.5.0": information.sysName = String(varbind.value); break;
-          case "1.3.6.1.2.1.1.6.0": information.sysLocation = String(varbind.value); break;
-          case "1.3.6.1.2.1.1.7.0": information.sysServices = Number(varbind.value); break;
-        }
-      }
-      resolve(information);
-    });
+      error ? reject(error) : resolve(value);
+    };
+    try {
+      session.get([oid], (error, varbinds) => {
+        if (error) return finish(error);
+        const varbind = varbinds?.[0];
+        if (!varbind || snmp.isVarbindError(varbind)) return finish(new Error("SNMP returned no usable sysName.0 response."));
+        finish(null, { sysName: String(varbind.value), snmpVersion: normaliseSnmpVersion(device.snmp?.version) });
+      });
+    } catch (error) { finish(error); }
   });
 }
 
@@ -185,8 +144,7 @@ function decodeDuplex(value) {
 }
 
 function speedFromValues(highSpeed, speed) {
-  const hs = Number(highSpeed);
-  const legacy = Number(speed);
+  const hs = Number(highSpeed), legacy = Number(speed);
   if (Number.isFinite(hs) && hs > 0) return hs;
   if (Number.isFinite(legacy) && legacy > 0 && legacy < 4294967295) return legacy / 1000000;
   return null;
@@ -198,118 +156,86 @@ function valueToString(value) {
 }
 
 function interfaceRecord(index) {
-  return {
-    ifIndex: Number(index),
-    ifDescr: null,
-    ifName: null,
-    ifAlias: null,
-    ifType: null,
-    ifMtu: null,
-    ifSpeed: null,
-    ifPhysAddress: null,
-    ifAdminStatus: null,
-    ifOperStatus: null
-  };
+  return { ifIndex: Number(index), ifDescr: null, ifName: null, ifAlias: null, ifType: null, ifMtu: null, ifSpeed: null, ifPhysAddress: null, ifAdminStatus: null, ifOperStatus: null, highSpeed: null };
+}
+
+function walkSubtree(session, oid, onVarbind) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = error => {
+      if (settled) return;
+      settled = true;
+      error ? reject(error) : resolve();
+    };
+    try {
+      session.subtree(oid, 20, varbinds => {
+        for (const varbind of varbinds || []) if (!snmp.isVarbindError(varbind)) onVarbind(varbind);
+      }, finish);
+    } catch (error) { finish(error); }
+  });
 }
 
 export async function discoverInterfaces(device) {
   const session = createSnmpSession(device);
   const interfaces = new Map();
-  const tableOid = "1.3.6.1.2.1.2.2.1";
-  const extendedTableOid = "1.3.6.1.2.1.31.1.1.1";
-
-  const consumeIfTable = varbind => {
-    const parts = varbind.oid.split(".");
-    const column = parts[parts.length - 2];
-    const index = parts[parts.length - 1];
-    const item = interfaces.get(index) || interfaceRecord(index);
-    const value = varbind.value;
-    switch (column) {
-      case "1": item.ifIndex = Number(value); break;
-      case "2": item.ifDescr = valueToString(value); break;
-      case "3": item.ifType = Number(value); break;
-      case "4": item.ifMtu = Number(value); break;
-      case "5": item.ifSpeed = Number(value); break;
-      case "6": item.ifPhysAddress = valueToString(value); break;
-      case "7": item.ifAdminStatus = Number(value); break;
-      case "8": item.ifOperStatus = Number(value); break;
-    }
-    interfaces.set(index, item);
-  };
-
-  const consumeIfXTable = varbind => {
-    const parts = varbind.oid.split(".");
-    const column = parts[parts.length - 2];
-    const index = parts[parts.length - 1];
-    const item = interfaces.get(index) || interfaceRecord(index);
-    const value = varbind.value;
-    switch (column) {
-      case "1": item.ifName = valueToString(value); break;
-      case "15": item.highSpeed = Number(value); break;
-      case "18": item.ifAlias = valueToString(value); break;
+  const consume = (varbind, extended = false) => {
+    const parts = varbind.oid.split("."), column = parts[parts.length - 2], index = parts[parts.length - 1];
+    const item = interfaces.get(index) || interfaceRecord(index), value = varbind.value;
+    if (!extended) {
+      switch (column) {
+        case "1": item.ifIndex = Number(value); break;
+        case "2": item.ifDescr = valueToString(value); break;
+        case "3": item.ifType = Number(value); break;
+        case "4": item.ifMtu = Number(value); break;
+        case "5": item.ifSpeed = Number(value); break;
+        case "6": item.ifPhysAddress = valueToString(value); break;
+        case "7": item.ifAdminStatus = Number(value); break;
+        case "8": item.ifOperStatus = Number(value); break;
+      }
+    } else {
+      switch (column) {
+        case "1": item.ifName = valueToString(value); break;
+        case "15": item.highSpeed = Number(value); break;
+        case "18": item.ifAlias = valueToString(value); break;
+      }
     }
     interfaces.set(index, item);
   };
 
   try {
-    await walkSubtree(session, tableOid, consumeIfTable);
-    try {
-      await walkSubtree(session, extendedTableOid, consumeIfXTable);
-    } catch (error) {
-      console.info(`[SNMP] Optional ifXTable unavailable on ${device.hostname || device.ipAddress}: ${error.message}`);
-    }
-
+    await walkSubtree(session, "1.3.6.1.2.1.2.2.1", v => consume(v, false));
+    try { await walkSubtree(session, "1.3.6.1.2.1.31.1.1.1", v => consume(v, true)); }
+    catch (error) { console.info(`[SNMP] Optional ifXTable unavailable on ${device.hostname || device.ipAddress}: ${error.message}`); }
     const result = [...interfaces.values()]
       .filter(item => Number.isInteger(item.ifIndex) && item.ifIndex > 0)
       .sort((a, b) => a.ifIndex - b.ifIndex)
-      .map(item => ({
-        ...item,
-        ifSpeedMbps: speedFromValues(item.highSpeed, item.ifSpeed),
-        displayName: item.ifName || item.ifDescr || `Interface ${item.ifIndex}`
-      }));
-
+      .map(item => ({ ...item, ifSpeedMbps: speedFromValues(item.highSpeed, item.ifSpeed), displayName: item.ifName || item.ifDescr || `Interface ${item.ifIndex}` }));
     safeClose(session);
     return result;
-  } catch (error) {
-    safeClose(session);
-    throw error;
-  }
+  } catch (error) { safeClose(session); throw error; }
 }
 
 export async function getInterfaceStatus(device, ifIndex) {
   const session = createSnmpSession(device);
-  const adminOid = `${IF_OIDS.adminStatus}.${ifIndex}`;
-  const operOid = `${IF_OIDS.operStatus}.${ifIndex}`;
+  const adminOid = `${IF_OIDS.adminStatus}.${ifIndex}`, operOid = `${IF_OIDS.operStatus}.${ifIndex}`;
   return new Promise((resolve, reject) => {
     session.get([adminOid, operOid], (error, varbinds) => {
       safeClose(session);
       if (error) return reject(error);
-      let adminStatus = null;
-      let operStatus = null;
+      let adminStatus = null, operStatus = null;
       for (const varbind of varbinds || []) {
         if (snmp.isVarbindError(varbind)) continue;
         if (varbind.oid === adminOid) adminStatus = Number(varbind.value);
         if (varbind.oid === operOid) operStatus = Number(varbind.value);
       }
-      resolve({
-        ifIndex,
-        adminStatus,
-        operStatus,
-        adminState: adminStatus === 1 ? "UP" : adminStatus === 2 ? "DOWN" : "UNKNOWN",
-        operState: operStatus === 1 ? "UP" : operStatus === 2 ? "DOWN" : "UNKNOWN"
-      });
+      resolve({ ifIndex, adminStatus, operStatus, adminState: adminStatus === 1 ? "UP" : adminStatus === 2 ? "DOWN" : "UNKNOWN", operState: operStatus === 1 ? "UP" : operStatus === 2 ? "DOWN" : "UNKNOWN" });
     });
   });
 }
 
 export async function getInterfaceMetrics(device, ifIndex) {
   const session = createSnmpSession(device);
-  const oids = Object.fromEntries(
-    Object.entries(IF_OIDS)
-      .filter(([key]) => !["ifName", "ifAlias"].includes(key))
-      .map(([key, oid]) => [key, `${oid}.${ifIndex}`])
-  );
-
+  const oids = Object.fromEntries(Object.entries(IF_OIDS).filter(([key]) => !["ifName", "ifAlias"].includes(key)).map(([key, oid]) => [key, `${oid}.${ifIndex}`]));
   return new Promise((resolve, reject) => {
     session.get(Object.values(oids), (error, varbinds) => {
       safeClose(session);
@@ -321,21 +247,7 @@ export async function getInterfaceMetrics(device, ifIndex) {
         if (key) values[key] = Number(varbind.value);
       }
       const speedMbps = speedFromValues(values.highSpeed, values.speed);
-      resolve({
-        ifIndex,
-        speedMbps,
-        speedSource: Number(values.highSpeed) > 0 ? "ifHighSpeed" : "ifSpeed",
-        duplex: decodeDuplex(values.duplex),
-        adminStatus: values.adminStatus ?? null,
-        operStatus: values.operStatus ?? null,
-        inOctets: values.inOctets ?? 0,
-        outOctets: values.outOctets ?? 0,
-        inErrors: values.inErrors ?? 0,
-        outErrors: values.outErrors ?? 0,
-        inDiscards: values.inDiscards ?? 0,
-        outDiscards: values.outDiscards ?? 0,
-        checkedAt: new Date()
-      });
+      resolve({ ifIndex, speedMbps, speedSource: Number(values.highSpeed) > 0 ? "ifHighSpeed" : "ifSpeed", duplex: decodeDuplex(values.duplex), adminStatus: values.adminStatus ?? null, operStatus: values.operStatus ?? null, inOctets: values.inOctets ?? 0, outOctets: values.outOctets ?? 0, inErrors: values.inErrors ?? 0, outErrors: values.outErrors ?? 0, inDiscards: values.inDiscards ?? 0, outDiscards: values.outDiscards ?? 0, checkedAt: new Date() });
     });
   });
 }
