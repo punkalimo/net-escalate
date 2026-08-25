@@ -7,21 +7,29 @@ function createSnmpSession(device) {
   const version = device.snmp?.version || "2c";
   const community = device.snmp?.community || "public";
 
-  let session;
-
   if (version === "1" || version === 1) {
-    session = snmp.createSession(device.ipAddress, community, {
+    return snmp.createSession(device.ipAddress, community, {
       version: snmp.Version1, timeout: 5000, retries: 1
     });
-  } else if (version === "2c" || version === 2 || version === "2") {
-    session = snmp.createSession(device.ipAddress, community, {
+  }
+  if (version === "2c" || version === 2 || version === "2") {
+    return snmp.createSession(device.ipAddress, community, {
       version: snmp.Version2c, timeout: 5000, retries: 1
     });
-  } else {
-    throw new Error(`Unsupported SNMP version: ${version}`);
   }
+  throw new Error(`Unsupported SNMP version: ${version}`);
+}
 
-  return session;
+// net-snmp can report ERR_SOCKET_DGRAM_NOT_RUNNING when a timeout/error has
+// already closed the underlying UDP socket. Cleanup must never crash the
+// monitoring process, so close is deliberately best-effort.
+function safeClose(session) {
+  if (!session || typeof session.close !== "function") return;
+  try { session.close(); } catch (error) {
+    if (error?.code !== "ERR_SOCKET_DGRAM_NOT_RUNNING") {
+      console.warn(`[SNMP] Session cleanup warning: ${error.message}`);
+    }
+  }
 }
 
 export async function testSnmpConnection(device) {
@@ -33,7 +41,7 @@ export async function testSnmpConnection(device) {
 
   return new Promise((resolve, reject) => {
     session.get(oids, (error, varbinds) => {
-      session.close();
+      safeClose(session);
       if (error) return reject(error);
       const information = {};
       for (const varbind of varbinds) {
@@ -83,11 +91,20 @@ function speedFromValues(highSpeed, speed) {
 
 export async function discoverInterfaces(device) {
   const session = createSnmpSession(device);
-  const tableOid = "1.3.6.1.2.1.2.2.1";
 
   return new Promise((resolve, reject) => {
+    const interfaces = {};
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      safeClose(session);
+      if (error) reject(error);
+      else resolve(value);
+    };
+
+    const tableOid = "1.3.6.1.2.1.2.2.1";
     session.subtree(tableOid, 20, varbinds => {
-      const interfaces = {};
       for (const varbind of varbinds) {
         if (snmp.isVarbindError(varbind)) continue;
         const parts = varbind.oid.split(".");
@@ -111,8 +128,8 @@ export async function discoverInterfaces(device) {
           case "8": interfaces[index].ifOperStatus = Number(value); break;
         }
       }
-      resolve(Object.values(interfaces));
-    }, error => reject(error));
+    }, error => finish(error, Object.values(interfaces)))
+      .on?.("end", () => finish(null, Object.values(interfaces)));
   });
 }
 
@@ -123,7 +140,7 @@ export async function getInterfaceStatus(device, ifIndex) {
 
   return new Promise((resolve, reject) => {
     session.get([adminOid, operOid], (error, varbinds) => {
-      session.close();
+      safeClose(session);
       if (error) return reject(error);
       let adminStatus = null;
       let operStatus = null;
@@ -149,7 +166,7 @@ export async function getInterfaceMetrics(device, ifIndex) {
 
   return new Promise((resolve, reject) => {
     session.get(Object.values(oids), (error, varbinds) => {
-      session.close();
+      safeClose(session);
       if (error) return reject(error);
 
       const values = {};
