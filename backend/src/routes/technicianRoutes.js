@@ -1,6 +1,6 @@
 import express from "express";
 import Technician from "../models/Technician.js";
-import { callTechnician } from "../services/calleService.js";
+import { callTechnician, getCallCapability } from "../services/calleService.js";
 
 const router = express.Router();
 
@@ -17,9 +17,7 @@ router.get("/", async (req, res) => {
 router.post("/", async (req, res) => {
   try {
     const { technicianId, name, phone, level, role, active = true } = req.body;
-    if (!technicianId || !name || !phone || !level) {
-      return res.status(400).json({ success: false, message: "Technician ID, name, phone and level are required." });
-    }
+    if (!technicianId || !name || !phone || !level) return res.status(400).json({ success: false, message: "Technician ID, name, phone and level are required." });
     const technician = await Technician.create({ technicianId, name, phone, level: Number(level), role, active });
     res.status(201).json({ success: true, technician });
   } catch (error) {
@@ -31,11 +29,7 @@ router.post("/", async (req, res) => {
 
 router.patch("/:technicianId", async (req, res) => {
   try {
-    const technician = await Technician.findOneAndUpdate(
-      { technicianId: req.params.technicianId },
-      { $set: { ...req.body, level: req.body.level != null ? Number(req.body.level) : undefined } },
-      { new: true, runValidators: true }
-    );
+    const technician = await Technician.findOneAndUpdate({ technicianId: req.params.technicianId }, { $set: { ...req.body, level: req.body.level != null ? Number(req.body.level) : undefined } }, { new: true, runValidators: true });
     if (!technician) return res.status(404).json({ success: false, message: "Technician not found." });
     res.json({ success: true, technician });
   } catch (error) {
@@ -55,10 +49,22 @@ router.delete("/:technicianId", async (req, res) => {
   }
 });
 
+router.get("/:technicianId/capability", async (req, res) => {
+  try {
+    const technician = await Technician.findOne({ technicianId: req.params.technicianId });
+    if (!technician) return res.status(404).json({ success: false, message: "Technician not found." });
+    res.json({ success: true, capability: getCallCapability(technician.phone) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to determine CALL-E capability." });
+  }
+});
+
 router.post("/:technicianId/test-call", async (req, res) => {
   try {
     const technician = await Technician.findOne({ technicianId: req.params.technicianId, active: true });
     if (!technician) return res.status(404).json({ success: false, message: "Active technician not found." });
+    const capability = getCallCapability(technician.phone);
+    if (capability.state === "UNSUPPORTED") return res.status(422).json({ success: false, provider: "calle", code: capability.code, capability, message: capability.message });
     const testIncident = {
       incidentId: `TEST-CALL-${Date.now()}`,
       escalationLevel: Number(technician.level || 1),
@@ -69,10 +75,10 @@ router.post("/:technicianId/test-call", async (req, res) => {
       technician: { id: technician.technicianId, name: technician.name, phone: technician.phone }
     };
     const result = await callTechnician(testIncident);
-    res.json({ success: true, test: true, technician, call: result });
+    res.json({ success: true, test: true, technician, capability, call: result });
   } catch (error) {
     console.error("CALL-E test call error:", error);
-    res.status(502).json({ success: false, message: error.message || "CALL-E test call failed." });
+    res.status(error?.status || 502).json({ success: false, provider: "calle", code: error?.code || "provider_error", retryable: error?.retryable === true, details: error?.details || null, message: error.message || "CALL-E test call failed." });
   }
 });
 
