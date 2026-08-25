@@ -12,8 +12,10 @@ function isSafeTarget(value) {
 }
 
 function runCommand(command, args, timeout = COMMAND_TIMEOUT_MS) {
-  return new Promise((resolve) => {
-    const child = spawn(command, args, { shell: false, windowsHide: true });
+  return new Promise(resolve => {
+    let child;
+    try { child = spawn(command, args, { shell: false, windowsHide: true }); }
+    catch (error) { resolve({ ok: false, code: error.code || "SPAWN_ERROR", stdout: "", stderr: "", error: error.message }); return; }
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -22,7 +24,6 @@ function runCommand(command, args, timeout = COMMAND_TIMEOUT_MS) {
       child.kill("SIGTERM");
       setTimeout(() => child.kill("SIGKILL"), 1000).unref();
     }, timeout);
-
     child.stdout.on("data", chunk => { stdout += chunk.toString(); });
     child.stderr.on("data", chunk => { stderr += chunk.toString(); });
     child.on("error", error => {
@@ -59,7 +60,6 @@ function parseNmap(output) {
   let osDetails = null;
   let hostname = null;
   let latencyMs = null;
-
   for (const line of lines) {
     const trimmed = line.trim();
     if (/^Device type:/i.test(trimmed)) deviceType = trimmed.replace(/^Device type:\s*/i, "").trim();
@@ -70,37 +70,37 @@ function parseNmap(output) {
       const match = trimmed.match(/\((\d+(?:\.\d+)?)s\)/i);
       if (match) latencyMs = Number.parseFloat(match[1]) * 1000;
     }
-
     const portMatch = trimmed.match(/^(\d+)\/(tcp|udp)\s+(open|closed|filtered)\s+(\S+)(?:\s+(.*))?$/i);
     if (portMatch && portMatch[3].toLowerCase() === "open") {
       openPorts.push({ port: Number(portMatch[1]), protocol: portMatch[2].toLowerCase(), state: "open", service: portMatch[4], version: portMatch[5]?.trim() || "" });
     }
   }
-
   return { hostname, latencyMs, deviceType, running, osDetails, openPorts };
 }
 
-function fallbackTraceroute(target) {
+function tracerouteCommand(target) {
   if (process.platform === "win32") return ["tracert", "-d", "-h", String(MAX_HOPS), target];
   return ["traceroute", "-n", "-w", "1", "-q", "1", "-m", String(MAX_HOPS), target];
 }
 
 async function traceTarget(target) {
-  const [command, ...args] = fallbackTraceroute(target);
+  const [command, ...args] = tracerouteCommand(target);
   const result = await runCommand(command, args);
-  if (result.ok || result.stdout) return { ...result, hops: parseTraceroute(result.stdout) };
+  if (result.ok || result.stdout) return { ...result, command, hops: parseTraceroute(result.stdout) };
   if (process.platform !== "win32") {
     const fallback = await runCommand("tracepath", ["-n", "-m", String(MAX_HOPS), target]);
-    return { ...fallback, hops: parseTraceroute(fallback.stdout) };
+    return { ...fallback, command: "tracepath", hops: parseTraceroute(fallback.stdout) };
   }
-  return { ...result, hops: [] };
+  return { ...result, command, hops: [] };
 }
 
 export async function discoverDevicePath(deviceId) {
-  const device = await Device.findOne({ deviceId }).lean().exec();
+  const devices = await Device.find({}).lean().exec();
+  const device = devices.find(item => item.deviceId === deviceId);
   if (!device) return { success: false, status: 404, message: "Device not found." };
   if (!isSafeTarget(device.ipAddress)) return { success: false, status: 400, message: "Device has an invalid or unsupported IP/hostname." };
 
+  const registeredByIp = new Map(devices.map(item => [item.ipAddress, item]));
   const [trace, nmap] = await Promise.all([
     traceTarget(device.ipAddress),
     runCommand("nmap", ["-Pn", "-n", "-sV", "-O", "--osscan-guess", "--open", "--top-ports", "20", device.ipAddress], 45_000)
@@ -109,20 +109,20 @@ export async function discoverDevicePath(deviceId) {
   const hops = trace.hops || [];
   const nodes = [];
   const seen = new Set();
-  const registeredByIp = new Map([[device.ipAddress, device]]);
-
   for (const hop of hops) {
     if (!hop.ip || seen.has(hop.ip)) continue;
     seen.add(hop.ip);
     const registered = registeredByIp.get(hop.ip);
     nodes.push({
-      id: `hop-${hop.hop}-${hop.ip}`,
+      id: registered?.deviceId || `hop-${hop.hop}-${hop.ip}`,
       ipAddress: hop.ip,
       hostname: registered?.hostname || hop.ip,
       label: registered?.hostname || `Hop ${hop.hop}`,
       deviceType: registered?.deviceType || "unknown-hop",
       role: registered ? "REGISTERED_DEVICE" : "ROUTING_HOP",
       status: registered?.status || "UNKNOWN",
+      vendor: registered?.vendor || "",
+      model: registered?.model || "",
       hop: hop.hop,
       rttMs: hop.rttMs,
       registeredDeviceId: registered?.deviceId || null
@@ -142,11 +142,8 @@ export async function discoverDevicePath(deviceId) {
     location: device.location,
     hop: hops.find(h => h.ip === device.ipAddress)?.hop || null
   };
-  if (!nodes.some(node => node.ipAddress === device.ipAddress)) nodes.push(targetNode);
-  else {
-    const existing = nodes.find(node => node.ipAddress === device.ipAddress);
-    Object.assign(existing, targetNode);
-  }
+  const targetIndex = nodes.findIndex(node => node.ipAddress === device.ipAddress);
+  if (targetIndex < 0) nodes.push(targetNode); else nodes[targetIndex] = targetNode;
 
   const edges = [];
   for (let i = 0; i < nodes.length - 1; i += 1) {
@@ -157,20 +154,20 @@ export async function discoverDevicePath(deviceId) {
   }
 
   const nmapParsed = parseNmap(nmap.stdout || "");
-  const scanStatus = nmap.error === "ENOENT" ? "NOT_INSTALLED" : nmap.timedOut ? "TIMEOUT" : nmap.ok || nmap.stdout ? "COMPLETE" : "FAILED";
-
+  const scanStatus = nmap.code === "ENOENT" ? "NOT_INSTALLED" : nmap.timedOut ? "TIMEOUT" : nmap.ok || nmap.stdout ? "COMPLETE" : "FAILED";
   return {
     success: true,
     generatedAt: new Date().toISOString(),
     target: { deviceId: device.deviceId, hostname: device.hostname, ipAddress: device.ipAddress, status: device.status },
     method: { traceroute: trace.ok || hops.length > 0 ? "COMPLETE" : "FAILED", nmap: scanStatus },
-    traceroute: { command: process.platform === "win32" ? "tracert" : "traceroute", hops, error: trace.stderr?.trim() || null },
-    nmap: { ...nmapParsed, error: nmap.error || nmap.stderr?.trim() || null },
+    traceroute: { command: trace.command, hops, error: trace.error || trace.stderr?.trim() || null },
+    nmap: { ...nmapParsed, status: scanStatus, error: nmap.error || nmap.stderr?.trim() || null },
     nodes,
     edges,
     warnings: [
       ...(trace.timedOut ? ["Traceroute timed out before completing all hops."] : []),
-      ...(nmap.error === "ENOENT" ? ["Nmap is not installed on the NetEscalate backend host."] : []),
+      ...(trace.code === "ENOENT" ? ["Traceroute/tracepath is not installed on the NetEscalate backend host."] : []),
+      ...(nmap.code === "ENOENT" ? ["Nmap is not installed on the NetEscalate backend host. Install nmap to enable service and OS fingerprinting."] : []),
       ...(nmap.timedOut ? ["Nmap scan timed out."] : [])
     ]
   };
