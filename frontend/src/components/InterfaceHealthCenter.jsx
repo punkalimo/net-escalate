@@ -89,7 +89,26 @@ export default function InterfaceHealthCenter() {
 
   const latest = selectedInterface?.metrics || samples[samples.length - 1] || null;
   const latestHealth = selectedInterface?.metrics?.health || samples[samples.length - 1]?.health || "UNKNOWN";
-  const healthReason = selectedInterface?.metrics?.healthReasons?.join(" ") || "No active health warning.";
+  const latestCheckedAt = selectedInterface?.metrics?.checkedAt || selectedInterface?.lastCheckedAt || null;
+  const pollingSeconds = Math.max(5, Number(selectedDevice?.pollingInterval || 30));
+  const sampleAgeSeconds = latestCheckedAt ? (Date.now() - new Date(latestCheckedAt).getTime()) / 1000 : Infinity;
+  const stale = !Number.isFinite(sampleAgeSeconds) || sampleAgeSeconds > Math.max(pollingSeconds * 3, 120);
+
+  // A parent-device outage must never be displayed as a healthy interface just
+  // because the interface's last successful SNMP sample was UP. Likewise, an
+  // old sample is UNKNOWN rather than pretending it is still current.
+  const effectiveHealth = selectedDevice?.status === "DOWN"
+    ? "DOWN"
+    : stale
+      ? "UNKNOWN"
+      : latestHealth;
+
+  const healthReason = selectedDevice?.status === "DOWN"
+    ? "Parent device is DOWN; the interface is considered unavailable until the device recovers."
+    : stale
+      ? `No fresh SNMP interface sample has been received for ${Number.isFinite(sampleAgeSeconds) ? Math.round(sampleAgeSeconds) : "an unknown number of"} seconds.`
+      : selectedInterface?.metrics?.healthReasons?.join(" ") || "No active health warning.";
+
   const maxUtilization = useMemo(() => Math.max(0, ...samples.map(s => Number(s.utilizationPercent || 0))), [samples]);
   const avgUtilization = useMemo(() => samples.length ? samples.reduce((sum, s) => sum + Number(s.utilizationPercent || 0), 0) / samples.length : 0, [samples]);
 
@@ -108,10 +127,10 @@ export default function InterfaceHealthCenter() {
 
       {!selectedDevice ? <div className="py-12 text-center text-sm text-slate-600">{loading ? "Loading devices..." : "Select a monitored device."}</div> : <>
         <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className={`rounded-lg border p-4 ${healthStyles[latestHealth] || healthStyles.UNKNOWN}`}><p className="text-xs opacity-70">Health</p><p className="mt-1 text-lg font-bold">{latestHealth}</p><p className="mt-1 text-xs opacity-70">{healthReason}</p></div>
+          <div className={`rounded-lg border p-4 ${healthStyles[effectiveHealth] || healthStyles.UNKNOWN}`}><p className="text-xs opacity-70">Health</p><p className="mt-1 text-lg font-bold">{effectiveHealth}</p><p className="mt-1 text-xs opacity-70">{healthReason}</p></div>
           <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4"><p className="text-xs text-slate-600">Link Speed</p><p className="mt-1 text-lg font-semibold text-white">{speed(latest?.speedMbps)}</p></div>
           <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4"><p className="text-xs text-slate-600">Current Traffic</p><p className="mt-1 text-sm font-semibold text-slate-300">↓ {rate(latest?.inBps)} · ↑ {rate(latest?.outBps)}</p></div>
-          <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4"><p className="text-xs text-slate-600">Utilization</p><p className="mt-1 text-lg font-semibold text-white">{latest?.utilizationPercent == null ? "—" : `${Number(latest.utilizationPercent).toFixed(1)}%`}</p></div>
+          <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4"><p className="text-xs text-slate-600">Utilization</p><p className="mt-1 text-lg font-semibold text-white">{effectiveHealth === "DOWN" || effectiveHealth === "UNKNOWN" || latest?.utilizationPercent == null ? "—" : `${Number(latest.utilizationPercent).toFixed(1)}%`}</p></div>
         </div>
 
         <div className="mt-5 grid gap-5 lg:grid-cols-[2fr_1fr]">
@@ -120,10 +139,10 @@ export default function InterfaceHealthCenter() {
         </div>
 
         <div className="mt-5 grid gap-3 md:grid-cols-4">
-          <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4"><Wifi size={16} className="text-green-400"/><p className="mt-2 text-xs text-slate-600">Interface State</p><p className="mt-1 text-sm text-slate-300">{selectedInterface?.status || "UNKNOWN"}</p></div>
-          <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4"><WifiOff size={16} className="text-red-400"/><p className="mt-2 text-xs text-slate-600">Active Incident</p><p className="mt-1 text-sm text-slate-300">{latest?.activeIncidentId || "None"}</p></div>
+          <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4">{effectiveHealth === "DOWN" ? <WifiOff size={16} className="text-red-400"/> : <Wifi size={16} className="text-green-400"/>}<p className="mt-2 text-xs text-slate-600">Interface State</p><p className="mt-1 text-sm text-slate-300">{effectiveHealth === "DOWN" ? "DOWN" : stale ? "UNKNOWN" : selectedInterface?.status || "UNKNOWN"}</p></div>
+          <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4"><WifiOff size={16} className="text-red-400"/><p className="mt-2 text-xs text-slate-600">Active Incident</p><p className="mt-1 text-sm text-slate-300">{latest?.activeIncidentId || (selectedDevice?.activeIncidentId ? selectedDevice.activeIncidentId : "None")}</p></div>
           <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4"><Server size={16} className="text-blue-400"/><p className="mt-2 text-xs text-slate-600">Device</p><p className="mt-1 text-sm text-slate-300">{selectedDevice.hostname}</p></div>
-          <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4"><Activity size={16} className="text-purple-400"/><p className="mt-2 text-xs text-slate-600">Health Score</p><p className="mt-1 text-sm text-slate-300">{latest?.healthScore == null ? "—" : `${latest.healthScore}/100`}</p></div>
+          <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4"><Activity size={16} className="text-purple-400"/><p className="mt-2 text-xs text-slate-600">Health Score</p><p className="mt-1 text-sm text-slate-300">{effectiveHealth === "DOWN" ? "0/100" : latest?.healthScore == null || stale ? "—" : `${latest.healthScore}/100`}</p></div>
         </div>
       </>}
     </div>
