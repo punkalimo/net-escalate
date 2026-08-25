@@ -1,7 +1,7 @@
 import express from "express";
 import Device from "../models/Device.js";
 import InterfaceSample from "../models/InterfaceSample.js";
-import { discoverInterfaces, getInterfaceStatus, getInterfaceMetrics } from "../services/snmpService.js";
+import { discoverInterfaces, getInterfaceStatus, getInterfaceMetrics, testSnmpConnection } from "../services/snmpService.js";
 
 const router = express.Router();
 
@@ -27,6 +27,37 @@ router.post("/:deviceId/discover", async (req, res) => {
   try {
     const device = await Device.findOne({ deviceId: req.params.deviceId });
     if (!device) return res.status(404).json({ success: false, message: "Device not found." });
+
+    if (device.snmp?.enabled === false) {
+      return res.status(400).json({
+        success: false,
+        code: "SNMP_DISABLED",
+        message: `SNMP monitoring is disabled for ${device.hostname}. Enable SNMP in the device settings first.`
+      });
+    }
+
+    if (!["1", "2c", 1, 2].includes(device.snmp?.version || "2c")) {
+      return res.status(400).json({
+        success: false,
+        code: "SNMP_VERSION_UNSUPPORTED",
+        message: `SNMP ${device.snmp?.version || "unknown"} is not supported by the current discovery engine. Use SNMP v1 or v2c.`
+      });
+    }
+
+    // Fail early with a useful diagnostic instead of waiting for interface
+    // discovery to time out and returning the generic "Failed to discover interfaces".
+    try {
+      await testSnmpConnection(device);
+    } catch (snmpError) {
+      const reason = snmpError?.code ? `${snmpError.message} (${snmpError.code})` : (snmpError?.message || String(snmpError));
+      return res.status(502).json({
+        success: false,
+        code: "SNMP_UNREACHABLE",
+        message: `SNMP connection to ${device.hostname} (${device.ipAddress}) failed. Verify that SNMP is enabled on the device and that the SNMP version/community are correct. ${reason}`,
+        error: reason
+      });
+    }
+
     const discovered = await discoverInterfaces(device);
     const previousInterfaces = (device.interfaces || []).reduce((map, item) => {
       if (item.name) map[item.name] = item;
@@ -38,12 +69,20 @@ router.post("/:deviceId/discover", async (req, res) => {
       let status = "UNKNOWN";
       let metrics = null;
       try { status = (await getInterfaceStatus(device, item.ifIndex)).operState || "UNKNOWN"; }
-      catch (error) { console.warn(`INTERFACE STATUS ERROR for ${name}:`, error.message); }
+      catch (error) { console.warn(`[INTERFACE DISCOVERY] Status unavailable for ${name}: ${error.message}`); }
       try { metrics = await getInterfaceMetrics(device, item.ifIndex); }
-      catch (error) { console.warn(`INTERFACE METRICS ERROR for ${name}:`, error.message); }
+      catch (error) { console.warn(`[INTERFACE DISCOVERY] Metrics unavailable for ${name}: ${error.message}`); }
       const previous = previousInterfaces[name]?.metrics;
       const rates = metrics ? calculateRates(metrics, previous) : { inBps: null, outBps: null, utilizationPercent: null };
-      return { name, description: name, ipAddress: "", status, lastCheckedAt: new Date(), ifIndex: item.ifIndex, metrics: metrics ? { ...metrics, ...rates } : null };
+      return {
+        name,
+        description: name,
+        ipAddress: "",
+        status,
+        lastCheckedAt: new Date(),
+        ifIndex: item.ifIndex,
+        metrics: metrics ? { ...metrics, ...rates } : null
+      };
     }));
 
     await Device.collection.updateOne({ deviceId: device.deviceId }, { $set: { interfaces, updatedAt: new Date() } });
@@ -51,12 +90,16 @@ router.post("/:deviceId/discover", async (req, res) => {
     return res.json({ success: true, deviceId: device.deviceId, interfaces });
   } catch (error) {
     console.error("INTERFACE DISCOVERY ERROR:", error);
-    return res.status(500).json({ success: false, message: "Failed to discover interfaces.", error: error.message });
+    const reason = error?.code ? `${error.message} (${error.code})` : (error?.message || String(error));
+    return res.status(500).json({
+      success: false,
+      code: "INTERFACE_DISCOVERY_FAILED",
+      message: `Interface discovery failed for ${req.params.deviceId}: ${reason}`,
+      error: reason
+    });
   }
 });
 
-// Keep the history route before /:deviceId so Express does not interpret
-// the literal "history" segment as part of the deviceId parameter.
 router.get("/:deviceId/history", async (req, res) => {
   try {
     const device = await Device.findOne({ deviceId: req.params.deviceId }).lean();
