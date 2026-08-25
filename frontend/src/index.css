@@ -34,3 +34,26 @@ body {
 .form-input:focus {
   border-color: rgb(59 130 246);
 }
+
+/* Phase 4 launcher rail: keep RCA, Phase 4 and Topology controls together
+   on the right edge so they never compete with dashboard content. */
+button[title="Open Root Cause Analysis"],
+button[title="Open Phase 4 Operations Suite"],
+button[title="Open Network Topology"],
+button[title="Open Topology"] {
+  position: fixed !important;
+  top: 50% !important;
+  right: 1rem !important;
+  bottom: auto !important;
+  left: auto !important;
+  transform: translateY(-50%) !important;
+}
+
+@media (max-width: 640px) {
+  button[title="Open Root Cause Analysis"],
+  button[title="Open Phase 4 Operations Suite"],
+  button[title="Open Network Topology"],
+  button[title="Open Topology"] {
+    right: 0.75rem !important;
+  }
+}
