@@ -4,6 +4,8 @@ import {
   getInterfaceMetrics
 } from "./snmpService.js";
 
+const monitoringTimers = new Map();
+
 function toNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
@@ -36,7 +38,7 @@ function calculateUtilization(inBps, outBps, speedMbps) {
   const capacityBps = speedMbps * 1_000_000;
   return Math.min(
     100,
-    ((Math.max(inBps, outBps)) / capacityBps) * 100
+    (Math.max(inBps, outBps) / capacityBps) * 100
   );
 }
 
@@ -51,8 +53,7 @@ function mergeDiscoveredInterfaces(existing, discovered) {
     return {
       ...(current?.toObject ? current.toObject() : current || {}),
       name: item.ifDescr || current?.name || `ifIndex-${item.ifIndex}`,
-      description:
-        current?.description || item.ifDescr || "",
+      description: current?.description || item.ifDescr || "",
       ifIndex: item.ifIndex,
       status:
         item.ifOperStatus === 1
@@ -90,10 +91,7 @@ export async function pollDeviceInterfaces(deviceId) {
 
   if (needsDiscovery) {
     const discovered = await discoverInterfaces(device);
-    interfaces = mergeDiscoveredInterfaces(
-      interfaces,
-      discovered
-    );
+    interfaces = mergeDiscoveredInterfaces(interfaces, discovered);
     device.interfaces = interfaces;
   }
 
@@ -185,6 +183,10 @@ export async function pollDeviceInterfaces(deviceId) {
   device.interfaces = updatedInterfaces;
   await device.save();
 
+  if (global.io) {
+    global.io.emit("device_updated", device.toObject());
+  }
+
   return {
     success: true,
     skipped: false,
@@ -192,6 +194,81 @@ export async function pollDeviceInterfaces(deviceId) {
   };
 }
 
+export function stopInterfaceMonitoring(deviceId) {
+  const timer = monitoringTimers.get(deviceId);
+
+  if (!timer) {
+    return;
+  }
+
+  clearInterval(timer);
+  monitoringTimers.delete(deviceId);
+}
+
+export async function startInterfaceMonitoring(device) {
+  stopInterfaceMonitoring(device.deviceId);
+
+  if (!device.monitoringEnabled || !device.snmp?.enabled) {
+    return;
+  }
+
+  const interval = Math.max(
+    5,
+    Number(device.pollingInterval || 30)
+  );
+
+  try {
+    await pollDeviceInterfaces(device.deviceId);
+  } catch (error) {
+    console.error(
+      `[INTERFACE MONITOR] Initial poll failed for ${device.hostname}: ${error.message}`
+    );
+  }
+
+  const timer = setInterval(async () => {
+    try {
+      await pollDeviceInterfaces(device.deviceId);
+    } catch (error) {
+      console.error(
+        `[INTERFACE MONITOR] Poll failed for ${device.hostname}: ${error.message}`
+      );
+    }
+  }, interval * 1000);
+
+  monitoringTimers.set(device.deviceId, timer);
+
+  console.log(
+    `[INTERFACE MONITOR] ${device.hostname} every ${interval}s`
+  );
+}
+
+export function stopAllInterfaceMonitoring() {
+  for (const deviceId of monitoringTimers.keys()) {
+    stopInterfaceMonitoring(deviceId);
+  }
+}
+
+export async function startAllInterfaceMonitoring() {
+  const devices = await Device.find({
+    monitoringEnabled: true,
+    "snmp.enabled": true
+  });
+
+  for (const device of devices) {
+    await startInterfaceMonitoring(device);
+  }
+
+  console.log(
+    `[INTERFACE MONITOR] Started for ${devices.length} SNMP device(s).`
+  );
+
+  return devices.length;
+}
+
 export default {
-  pollDeviceInterfaces
+  pollDeviceInterfaces,
+  startInterfaceMonitoring,
+  stopInterfaceMonitoring,
+  startAllInterfaceMonitoring,
+  stopAllInterfaceMonitoring
 };
