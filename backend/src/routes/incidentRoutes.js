@@ -18,7 +18,6 @@ export default function incidentRoutes(io) {
   router.post("/", async (req, res) => {
     try {
       const { device, location, severity, description, technician } = req.body;
-
       if (!device || !location || !severity || !description || !technician?.phone) {
         return res.status(400).json({ success: false, message: "Missing required incident information." });
       }
@@ -41,16 +40,9 @@ export default function incidentRoutes(io) {
       }
 
       if (io) io.emit("incident_created", incident);
+      processIncident(incident, io).catch(error => console.error("Escalation workflow error:", error));
 
-      processIncident(incident, io).catch(error => {
-        console.error("Escalation workflow error:", error);
-      });
-
-      return res.status(201).json({
-        success: true,
-        message: "Incident created and escalation workflow started.",
-        incident
-      });
+      return res.status(201).json({ success: true, message: "Incident created and escalation workflow started.", incident });
     } catch (error) {
       console.error("CREATE INCIDENT ERROR:", error);
       return res.status(500).json({ success: false, message: "Failed to create incident.", error: error.message });
@@ -59,26 +51,36 @@ export default function incidentRoutes(io) {
 
   router.get("/", async (req, res) => {
     try {
-      // Keep the normal incident list fast while enriching it with cached
-      // topology correlation. The correlation engine itself caches discovery
-      // for 30 seconds, so dashboard polling does not repeatedly SNMP-walk the fleet.
+      const limit = Math.min(Math.max(Number.parseInt(req.query.limit || "500", 10) || 500, 1), 2000);
+      const skip = Math.max(Number.parseInt(req.query.skip || "0", 10) || 0, 0);
+      const filter = {};
+      if (req.query.status && req.query.status !== "ALL") filter.status = req.query.status === "ACTIVE" ? { $ne: "RESOLVED" } : req.query.status;
+      if (req.query.severity && req.query.severity !== "ALL") filter.severity = req.query.severity;
+      if (req.query.device && req.query.device !== "ALL") filter.device = req.query.device;
+      if (req.query.source && req.query.source !== "ALL") filter.source = req.query.source;
+
+      const [incidents, total] = await Promise.all([
+        Incident.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean().exec(),
+        Incident.countDocuments(filter)
+      ]);
+
+      // Correlation is intentionally opt-in. The dashboard polls incidents frequently;
+      // topology discovery can involve multiple SNMP walks and must never sit on the
+      // critical path for the normal incident list.
       let correlation = null;
-      try {
-        correlation = await correlateActiveIncidents({ forceTopology: req.query.refresh === "true" });
-      } catch (correlationError) {
-        console.warn("INCIDENT CORRELATION WARNING:", correlationError.message);
+      if (req.query.includeCorrelation === "true") {
+        try {
+          correlation = await correlateActiveIncidents({ forceTopology: req.query.refresh === "true" });
+        } catch (correlationError) {
+          console.warn("INCIDENT CORRELATION WARNING:", correlationError.message);
+        }
       }
 
-      const incidents = correlation?.incidents || await Incident.find({}).sort({ createdAt: -1 }).lean().exec();
       return res.json({
         success: true,
-        incidents,
-        correlation: correlation ? {
-          generatedAt: correlation.generatedAt,
-          correlatedGroups: correlation.correlatedGroups,
-          suppressedChildren: correlation.suppressedChildren,
-          topologyGeneratedAt: correlation.topologyGeneratedAt
-        } : null
+        incidents: correlation?.incidents || incidents,
+        pagination: { total, limit, skip, returned: incidents.length, hasMore: skip + incidents.length < total },
+        correlation: correlation ? { generatedAt: correlation.generatedAt, correlatedGroups: correlation.correlatedGroups, suppressedChildren: correlation.suppressedChildren, topologyGeneratedAt: correlation.topologyGeneratedAt } : null
       });
     } catch (error) {
       console.error("GET INCIDENTS ERROR:", error);
@@ -86,8 +88,6 @@ export default function incidentRoutes(io) {
     }
   });
 
-  // Analyse active incidents against the discovered network topology and identify
-  // a likely root incident plus downstream child/symptom incidents.
   router.get("/correlation", async (req, res) => {
     try {
       const result = await correlateActiveIncidents({ forceTopology: req.query.refresh === "true" });
@@ -124,14 +124,8 @@ export default function incidentRoutes(io) {
   router.patch("/:incidentId/resolve", async (req, res) => {
     try {
       const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
 
-      if (!incident) {
-        return res.status(404).json({ success: false, message: "Incident not found." });
-      }
-
-      // Automatic incidents are controlled by monitoring state, not by the UI.
-      // A technician can acknowledge/escalate them, but the incident only
-      // becomes RESOLVED after the monitored condition actually recovers.
       if (["DEVICE_MONITOR", "INTERFACE_HEALTH"].includes(incident.source)) {
         return res.status(409).json({
           success: false,
@@ -144,7 +138,6 @@ export default function incidentRoutes(io) {
       incident.status = "RESOLVED";
       incident.resolvedAt = new Date();
       await incident.save();
-
       if (io) io.emit("incident_updated", incident);
       return res.json({ success: true, incident });
     } catch (error) {
