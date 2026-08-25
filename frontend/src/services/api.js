@@ -37,4 +37,6 @@ export async function getInterfaceHistory(deviceId, ifIndex, hours = 24) {
   if (ifIndex != null) params.ifIndex = ifIndex;
   return (await api.get(`/interfaces/${deviceId}/history`, { params })).data;
 }
+export async function getTopology() { return (await api.get("/topology")).data; }
+export async function discoverTopology() { return (await api.post("/topology/discover")).data; }
 export default api;
