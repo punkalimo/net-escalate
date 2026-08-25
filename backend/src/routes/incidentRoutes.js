@@ -59,8 +59,27 @@ export default function incidentRoutes(io) {
 
   router.get("/", async (req, res) => {
     try {
-      const incidents = await Incident.find({}).sort({ createdAt: -1 }).lean().exec();
-      return res.json({ success: true, incidents });
+      // Keep the normal incident list fast while enriching it with cached
+      // topology correlation. The correlation engine itself caches discovery
+      // for 30 seconds, so dashboard polling does not repeatedly SNMP-walk the fleet.
+      let correlation = null;
+      try {
+        correlation = await correlateActiveIncidents({ forceTopology: req.query.refresh === "true" });
+      } catch (correlationError) {
+        console.warn("INCIDENT CORRELATION WARNING:", correlationError.message);
+      }
+
+      const incidents = correlation?.incidents || await Incident.find({}).sort({ createdAt: -1 }).lean().exec();
+      return res.json({
+        success: true,
+        incidents,
+        correlation: correlation ? {
+          generatedAt: correlation.generatedAt,
+          correlatedGroups: correlation.correlatedGroups,
+          suppressedChildren: correlation.suppressedChildren,
+          topologyGeneratedAt: correlation.topologyGeneratedAt
+        } : null
+      });
     } catch (error) {
       console.error("GET INCIDENTS ERROR:", error);
       return res.status(500).json({ success: false, message: "Failed to retrieve incidents.", error: error.message });
