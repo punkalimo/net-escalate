@@ -34,3 +34,13 @@ body {
 .form-input:focus {
   border-color: rgb(59 130 246);
 }
+
+/* The RCA, Phase 4 and Topology components still expose their legacy
+   floating launchers so the existing navigation bridge can open them.
+   Keep those triggers in the DOM, but remove the duplicate controls from
+   the visible dashboard now that the primary sidebar owns navigation. */
+button[title="Open Root Cause Analysis"],
+button[aria-label="Phase 4 Command Center"],
+button[class~="bottom-6"][class~="right-6"] {
+  display: none !important;
+}
