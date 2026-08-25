@@ -10,6 +10,8 @@ for (const label of requiredLabels) if (!component.includes(label)) throw new Er
 for (const endpoint of requiredEndpoints) if (!component.includes(endpoint)) throw new Error(`UI contract missing endpoint: ${endpoint}`);
 for (const icon of requiredIcons) if (!component.includes(icon)) throw new Error(`UI contract missing visual affordance: ${icon}`);
 if (!app.includes("Phase4CommandCenter")) throw new Error("Phase 4 Command Center is not mounted by App.jsx");
-if (!component.includes("fixed bottom-5 right-5")) throw new Error("Phase 4 launcher is not positioned as an accessible floating control");
+if (!component.includes("fixed bottom-4 left-1/2")) throw new Error("Phase 4 launcher is not positioned as an accessible centered control");
 if (!component.includes("overflow-y-auto")) throw new Error("Command Center content is not scrollable");
-console.log("UI contract checks passed: launcher, tabs, controls, endpoints and responsive scroll affordances are present.");
+if (!component.includes("openWorkspace(\"topology\")")) throw new Error("Topology workspace hand-off is missing");
+if (!component.includes("/api/phase4/rca?refresh=true")) throw new Error("Topology-aware RCA refresh endpoint is missing");
+console.log("UI contract checks passed: launcher, tabs, controls, workspace hand-off, RCA endpoint and responsive scroll affordances are present.");
