@@ -4,15 +4,19 @@ const DEFAULT_TIMEOUT = 5000;
 const DEFAULT_RETRIES = 2;
 
 function normaliseSnmpVersion(value) {
-  const version = String(value ?? "2c").toLowerCase();
+  const version = String(value ?? "2c").trim().toLowerCase();
   if (["1", "v1"].includes(version)) return "1";
   if (["2", "2c", "v2c"].includes(version)) return "2c";
   if (["3", "v3"].includes(version)) return "3";
   throw new Error(`Unsupported SNMP version: ${value}`);
 }
 
+function cleanCredential(value, fallback = "") {
+  return String(value ?? fallback).trim();
+}
+
 function authProtocol(value) {
-  const protocol = String(value || "SHA").toUpperCase();
+  const protocol = cleanCredential(value, "SHA").toUpperCase();
   if (protocol === "MD5") return snmp.AuthProtocols.md5;
   if (protocol === "SHA" || protocol === "SHA1") return snmp.AuthProtocols.sha;
   if (protocol === "SHA224") return snmp.AuthProtocols.sha224;
@@ -23,7 +27,7 @@ function authProtocol(value) {
 }
 
 function privProtocol(value) {
-  const protocol = String(value || "AES").toUpperCase();
+  const protocol = cleanCredential(value, "AES").toUpperCase();
   if (protocol === "DES") return snmp.PrivProtocols.des;
   if (protocol === "AES" || protocol === "AES128") return snmp.PrivProtocols.aes;
   if (protocol === "AES256B") return snmp.PrivProtocols.aes256b;
@@ -32,7 +36,7 @@ function privProtocol(value) {
 }
 
 function securityLevel(value) {
-  const level = String(value || "noAuthNoPriv");
+  const level = cleanCredential(value, "noAuthNoPriv");
   const levels = snmp.SecurityLevel || {};
   if (!levels[level]) throw new Error(`Unsupported SNMPv3 security level: ${level}`);
   return levels[level];
@@ -56,37 +60,40 @@ function createSnmpSession(device) {
 
   const version = normaliseSnmpVersion(device.snmp?.version);
   const options = createCommonOptions(device);
+  const community = cleanCredential(device.snmp?.community, "public") || "public";
 
   if (version === "1") {
-    return snmp.createSession(device.ipAddress, device.snmp?.community || "public", {
+    return snmp.createSession(String(device.ipAddress).trim(), community, {
       ...options, version: snmp.Version1
     });
   }
 
   if (version === "2c") {
-    return snmp.createSession(device.ipAddress, device.snmp?.community || "public", {
+    return snmp.createSession(String(device.ipAddress).trim(), community, {
       ...options, version: snmp.Version2c
     });
   }
 
-  const username = String(device.snmp?.username || "").trim();
+  const username = cleanCredential(device.snmp?.username);
   if (!username) throw new Error("SNMPv3 username is required.");
-  const levelName = device.snmp?.securityLevel || "noAuthNoPriv";
+  const levelName = cleanCredential(device.snmp?.securityLevel, "noAuthNoPriv") || "noAuthNoPriv";
   const user = { name: username, level: securityLevel(levelName) };
 
   if (levelName === "authNoPriv" || levelName === "authPriv") {
-    if (!device.snmp?.authKey) throw new Error("SNMPv3 authentication key is required.");
+    const authKey = cleanCredential(device.snmp?.authKey);
+    if (!authKey) throw new Error("SNMPv3 authentication key is required.");
     user.authProtocol = authProtocol(device.snmp.authProtocol);
-    user.authKey = String(device.snmp.authKey);
+    user.authKey = authKey;
   }
   if (levelName === "authPriv") {
-    if (!device.snmp?.privKey) throw new Error("SNMPv3 privacy key is required.");
+    const privKey = cleanCredential(device.snmp?.privKey);
+    if (!privKey) throw new Error("SNMPv3 privacy key is required.");
     user.privProtocol = privProtocol(device.snmp.privProtocol);
-    user.privKey = String(device.snmp.privKey);
+    user.privKey = privKey;
   }
 
-  return snmp.createV3Session(device.ipAddress, user, {
-    ...options, context: String(device.snmp?.context || "")
+  return snmp.createV3Session(String(device.ipAddress).trim(), user, {
+    ...options, context: cleanCredential(device.snmp?.context)
   });
 }
 
@@ -95,6 +102,22 @@ function safeClose(session) {
   try { session.close(); } catch (error) {
     if (error?.code !== "ERR_SOCKET_DGRAM_NOT_RUNNING") console.warn(`[SNMP] Session cleanup warning: ${error.message}`);
   }
+}
+
+function normaliseSnmpError(error) {
+  if (!error) return null;
+  const message = String(error.message || error);
+  const lower = message.toLowerCase();
+  if (lower.includes("timeout") || lower.includes("timed out")) {
+    return new Error("SNMP request timed out. Verify UDP/161 reachability, SNMP is enabled, and the configured credentials are correct.");
+  }
+  if (lower.includes("authorization") || lower.includes("authentication") || lower.includes("community")) {
+    return new Error("SNMP authentication/authorization failed. Verify the SNMP version and credentials.");
+  }
+  if (error.code === "EHOSTUNREACH" || error.code === "ENETUNREACH") {
+    return new Error(`SNMP network unreachable (${error.code}). Verify routing and firewall rules to UDP/161.`);
+  }
+  return error instanceof Error ? error : new Error(message);
 }
 
 export async function testSnmpConnection(device) {
@@ -106,14 +129,21 @@ export async function testSnmpConnection(device) {
       if (settled) return;
       settled = true;
       safeClose(session);
-      error ? reject(error) : resolve(value);
+      error ? reject(normaliseSnmpError(error)) : resolve(value);
     };
     try {
       session.get([oid], (error, varbinds) => {
         if (error) return finish(error);
         const varbind = varbinds?.[0];
-        if (!varbind || snmp.isVarbindError(varbind)) return finish(new Error("SNMP returned no usable sysName.0 response."));
-        finish(null, { sysName: String(varbind.value), snmpVersion: normaliseSnmpVersion(device.snmp?.version) });
+        if (!varbind) return finish(new Error("SNMP returned no varbind for sysName.0."));
+        if (snmp.isVarbindError(varbind)) {
+          return finish(new Error(`SNMP varbind error for ${oid}: ${snmp.varbindError(varbind)}`));
+        }
+        finish(null, {
+          sysName: String(varbind.value),
+          snmpVersion: normaliseSnmpVersion(device.snmp?.version),
+          communityNormalized: normaliseSnmpVersion(device.snmp?.version) !== "3"
+        });
       });
     } catch (error) { finish(error); }
   });
@@ -165,11 +195,13 @@ function walkSubtree(session, oid, onVarbind) {
     const finish = error => {
       if (settled) return;
       settled = true;
-      error ? reject(error) : resolve();
+      error ? reject(normaliseSnmpError(error)) : resolve();
     };
     try {
       session.subtree(oid, 20, varbinds => {
-        for (const varbind of varbinds || []) if (!snmp.isVarbindError(varbind)) onVarbind(varbind);
+        for (const varbind of varbinds || []) {
+          if (!snmp.isVarbindError(varbind)) onVarbind(varbind);
+        }
       }, finish);
     } catch (error) { finish(error); }
   });
@@ -204,15 +236,25 @@ export async function discoverInterfaces(device) {
 
   try {
     await walkSubtree(session, "1.3.6.1.2.1.2.2.1", v => consume(v, false));
-    try { await walkSubtree(session, "1.3.6.1.2.1.31.1.1.1", v => consume(v, true)); }
-    catch (error) { console.info(`[SNMP] Optional ifXTable unavailable on ${device.hostname || device.ipAddress}: ${error.message}`); }
+    try {
+      await walkSubtree(session, "1.3.6.1.2.1.31.1.1.1", v => consume(v, true));
+    } catch (error) {
+      console.info(`[SNMP] Optional ifXTable unavailable on ${device.hostname || device.ipAddress}: ${error.message}`);
+    }
     const result = [...interfaces.values()]
       .filter(item => Number.isInteger(item.ifIndex) && item.ifIndex > 0)
       .sort((a, b) => a.ifIndex - b.ifIndex)
-      .map(item => ({ ...item, ifSpeedMbps: speedFromValues(item.highSpeed, item.ifSpeed), displayName: item.ifName || item.ifDescr || `Interface ${item.ifIndex}` }));
+      .map(item => ({
+        ...item,
+        ifSpeedMbps: speedFromValues(item.highSpeed, item.ifSpeed),
+        displayName: item.ifName || item.ifDescr || `Interface ${item.ifIndex}`
+      }));
     safeClose(session);
     return result;
-  } catch (error) { safeClose(session); throw error; }
+  } catch (error) {
+    safeClose(session);
+    throw normaliseSnmpError(error);
+  }
 }
 
 export async function getInterfaceStatus(device, ifIndex) {
@@ -221,7 +263,7 @@ export async function getInterfaceStatus(device, ifIndex) {
   return new Promise((resolve, reject) => {
     session.get([adminOid, operOid], (error, varbinds) => {
       safeClose(session);
-      if (error) return reject(error);
+      if (error) return reject(normaliseSnmpError(error));
       let adminStatus = null, operStatus = null;
       for (const varbind of varbinds || []) {
         if (snmp.isVarbindError(varbind)) continue;
@@ -239,7 +281,7 @@ export async function getInterfaceMetrics(device, ifIndex) {
   return new Promise((resolve, reject) => {
     session.get(Object.values(oids), (error, varbinds) => {
       safeClose(session);
-      if (error) return reject(error);
+      if (error) return reject(normaliseSnmpError(error));
       const values = {};
       for (const varbind of varbinds || []) {
         if (snmp.isVarbindError(varbind)) continue;
