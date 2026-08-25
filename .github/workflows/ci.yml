@@ -49,5 +49,7 @@ jobs:
         run: npm ci
       - name: Lint
         run: npm run lint
+      - name: UI contract checks
+        run: npm run test:ui-contract
       - name: Build
         run: npm run build
