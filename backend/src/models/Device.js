@@ -16,7 +16,11 @@ const interfaceMetricsSchema = new mongoose.Schema(
     outBps: { type: Number, default: null },
     utilizationPercent: { type: Number, default: null },
     sampleIntervalSeconds: { type: Number, default: null },
-    checkedAt: { type: Date, default: null }
+    checkedAt: { type: Date, default: null },
+    health: { type: String, enum: ["HEALTHY", "WARNING", "DEGRADED", "CRITICAL", "DOWN", "UNKNOWN"], default: "UNKNOWN" },
+    healthScore: { type: Number, default: null },
+    healthReasons: { type: [String], default: [] },
+    activeIncidentId: { type: String, default: null }
   },
   { _id: false }
 );
@@ -27,16 +31,9 @@ const interfaceSchema = new mongoose.Schema(
     description: { type: String, default: "" },
     ipAddress: { type: String, default: "" },
     ifIndex: { type: Number, default: null },
-    status: {
-      type: String,
-      enum: ["UP", "DOWN", "UNKNOWN"],
-      default: "UNKNOWN"
-    },
+    status: { type: String, enum: ["UP", "DOWN", "UNKNOWN"], default: "UNKNOWN" },
     lastCheckedAt: { type: Date, default: null },
-    metrics: {
-      type: interfaceMetricsSchema,
-      default: () => ({})
-    }
+    metrics: { type: interfaceMetricsSchema, default: () => ({}) }
   },
   { _id: false }
 );
@@ -97,24 +94,9 @@ const deviceSchema = new mongoose.Schema(
     activeIncidentId: { type: String, default: null },
     lastError: { type: String, default: null },
     monitoringResult: {
-      ping: {
-        reachable: { type: Boolean, default: false },
-        latency: { type: Number, default: null },
-        error: { type: String, default: null }
-      },
-      snmp: {
-        reachable: { type: Boolean, default: false },
-        skipped: { type: Boolean, default: false },
-        value: { type: mongoose.Schema.Types.Mixed, default: null },
-        error: { type: String, default: null }
-      },
-      http: {
-        enabled: { type: Boolean, default: false },
-        reachable: { type: Boolean, default: false },
-        statusCode: { type: Number, default: null },
-        responseTime: { type: Number, default: null },
-        error: { type: String, default: null }
-      },
+      ping: { reachable: { type: Boolean, default: false }, latency: { type: Number, default: null }, error: { type: String, default: null } },
+      snmp: { reachable: { type: Boolean, default: false }, skipped: { type: Boolean, default: false }, value: { type: mongoose.Schema.Types.Mixed, default: null }, error: { type: String, default: null } },
+      http: { enabled: { type: Boolean, default: false }, reachable: { type: Boolean, default: false }, statusCode: { type: Number, default: null }, responseTime: { type: Number, default: null }, error: { type: String, default: null } },
       ports: { type: mongoose.Schema.Types.Mixed, default: {} }
     }
   },
