@@ -2,38 +2,151 @@ import { useEffect, useState } from "react";
 import { Activity, Bot, Cable, GitBranch, History, Network, Play, RefreshCw, ShieldAlert, Sparkles, TrendingUp, X, Zap } from "lucide-react";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:5000";
-const tabs = [["overview", "NOC", Activity], ["topology", "Topology", Network], ["correlation", "Correlation", GitBranch], ["rca", "Root Cause", ShieldAlert], ["health", "Health", Cable], ["analytics", "Analytics", TrendingUp], ["changes", "Config", History], ["automation", "Automation", Play], ["assistant", "AI Assist", Bot]];
-const tones = { blue: "border-blue-500/20 bg-blue-500/10 text-blue-300", green: "border-emerald-500/20 bg-emerald-500/10 text-emerald-300", amber: "border-amber-500/20 bg-amber-500/10 text-amber-300", red: "border-red-500/20 bg-red-500/10 text-red-300" };
+const tabs = [
+  ["overview", "NOC", Activity],
+  ["topology", "Topology", Network],
+  ["correlation", "Correlation", GitBranch],
+  ["rca", "Root Cause", ShieldAlert],
+  ["health", "Health", Cable],
+  ["analytics", "Analytics", TrendingUp],
+  ["changes", "Config", History],
+  ["automation", "Automation", Play],
+  ["assistant", "AI Assist", Bot]
+];
+const tones = {
+  blue: "border-blue-500/20 bg-blue-500/10 text-blue-300",
+  green: "border-emerald-500/20 bg-emerald-500/10 text-emerald-300",
+  amber: "border-amber-500/20 bg-amber-500/10 text-amber-300",
+  red: "border-red-500/20 bg-red-500/10 text-red-300"
+};
 
-async function api(path, options = {}) { const response = await fetch(`${API}${path}`, { headers: { "Content-Type": "application/json" }, ...options }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.message || `Request failed (${response.status})`); return data; }
-function Badge({ children, tone = "blue" }) { return <span className={`rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${tones[tone]}`}>{children}</span>; }
-function Metric({ label, value, tone = "blue" }) { return <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-[10px] uppercase tracking-[.18em] text-slate-600">{label}</p><p className={`mt-2 text-2xl font-bold ${tone === "red" ? "text-red-300" : tone === "green" ? "text-emerald-300" : tone === "amber" ? "text-amber-300" : "text-white"}`}>{value}</p></div>; }
-function Card({ children }) { return <section className="rounded-2xl border border-slate-800/80 bg-slate-900/70 p-5 shadow-xl shadow-black/10">{children}</section>; }
+async function api(path, options = {}) {
+  const response = await fetch(`${API}${path}`, { headers: { "Content-Type": "application/json" }, ...options });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.message || `Request failed (${response.status})`);
+  return data;
+}
+
+function Badge({ children, tone = "blue" }) {
+  return <span className={`rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${tones[tone]}`}>{children}</span>;
+}
+
+function Metric({ label, value, tone = "blue" }) {
+  const valueTone = tone === "red" ? "text-red-300" : tone === "green" ? "text-emerald-300" : tone === "amber" ? "text-amber-300" : "text-white";
+  return <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-[10px] uppercase tracking-[.18em] text-slate-600">{label}</p><p className={`mt-2 text-2xl font-bold ${valueTone}`}>{value}</p></div>;
+}
+
+function Card({ children, className = "" }) {
+  return <section className={`rounded-2xl border border-slate-800/80 bg-slate-900/70 p-5 shadow-xl shadow-black/10 ${className}`}>{children}</section>;
+}
+
+function openWorkspace(type) {
+  window.dispatchEvent(new CustomEvent(`netescalate:open-${type}`));
+}
 
 export default function Phase4CommandCenter() {
-  const [open, setOpen] = useState(false), [tab, setTab] = useState("overview"), [overview, setOverview] = useState(null), [data, setData] = useState(null), [busy, setBusy] = useState(false), [message, setMessage] = useState(""), [question, setQuestion] = useState("What should I investigate first?");
-  const load = async () => { setBusy(true); try { setOverview(await api("/api/phase4/overview")); } catch (e) { setMessage(e.message); } finally { setBusy(false); } };
-  useEffect(() => { if (open) load(); }, [open]);
-  const select = async next => { setTab(next); setMessage(""); if (["analytics", "correlation", "rca", "changes"].includes(next)) { setBusy(true); try { setData(next === "analytics" ? await api("/api/phase4/analytics?hours=24") : next === "correlation" ? await api("/api/incidents/correlation") : next === "rca" ? await api("/api/phase4/rca") : await api("/api/phase4/config-changes")); } catch (e) { setMessage(e.message); } finally { setBusy(false); } } };
-  const action = async name => { setBusy(true); setMessage(""); try { await api("/api/phase4/automation/run", { method: "POST", body: JSON.stringify({ action: name }) }); setMessage("Automation completed successfully."); await load(); } catch (e) { setMessage(e.message); } finally { setBusy(false); } };
-  const ask = async () => { setBusy(true); try { setData(await api("/api/phase4/assistant", { method: "POST", body: JSON.stringify({ question }) })); setTab("assistant"); } catch (e) { setMessage(e.message); } finally { setBusy(false); } };
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState("overview");
+  const [overview, setOverview] = useState(null);
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [question, setQuestion] = useState("What should I investigate first?");
+
+  const loadOverview = async () => {
+    setBusy(true);
+    try { setOverview(await api("/api/phase4/overview")); setMessage(""); }
+    catch (error) { setMessage(error.message); }
+    finally { setBusy(false); }
+  };
+
+  useEffect(() => { if (open && !overview) loadOverview(); }, [open, overview]);
+
+  const select = async next => {
+    setTab(next);
+    setMessage("");
+    if (next === "topology") return;
+    if (!["analytics", "correlation", "rca", "changes"].includes(next)) return;
+    setBusy(true);
+    try {
+      const endpoint = next === "analytics"
+        ? "/api/phase4/analytics?hours=24"
+        : next === "correlation"
+          ? "/api/incidents/correlation"
+          : next === "rca"
+            ? "/api/phase4/rca?refresh=true"
+            : "/api/phase4/config-changes";
+      setData(await api(endpoint));
+    } catch (error) { setMessage(error.message); }
+    finally { setBusy(false); }
+  };
+
+  const action = async name => {
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await api("/api/phase4/automation/run", { method: "POST", body: JSON.stringify({ action: name }) });
+      if (name === "correlate") setData(result.result);
+      setMessage(`${name === "correlate" ? "Incident correlation" : "Topology discovery"} completed.`);
+      await loadOverview();
+    } catch (error) { setMessage(error.message); }
+    finally { setBusy(false); }
+  };
+
+  const ask = async () => {
+    setBusy(true);
+    setMessage("");
+    try { setData(await api("/api/phase4/assistant", { method: "POST", body: JSON.stringify({ question }) })); setTab("assistant"); }
+    catch (error) { setMessage(error.message); }
+    finally { setBusy(false); }
+  };
+
   const k = overview?.kpis || {};
+  const groups = data?.groups || [];
+  const analyses = data?.analyses || [];
+
   return <>
-    <button onClick={() => setOpen(true)} className="fixed bottom-5 right-5 z-50 inline-flex items-center gap-2 rounded-2xl border border-blue-400/20 bg-blue-600 px-4 py-3 text-xs font-bold text-white shadow-2xl shadow-blue-950/40 hover:bg-blue-500"><Sparkles size={15}/> Phase 4 Command Center</button>
-    {open && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/75 p-3 backdrop-blur-sm sm:p-6"><div className="flex h-[min(94vh,900px)] w-full max-w-[1500px] flex-col overflow-hidden rounded-3xl border border-slate-700 bg-[#060b14] shadow-2xl">
-      <header className="flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-950/90 px-5 py-4"><div className="flex items-center gap-3"><div className="rounded-xl bg-blue-600/15 p-2 text-blue-300"><Zap size={18}/></div><div><h2 className="font-semibold text-white">Phase 4 Operations Suite</h2><p className="text-[10px] uppercase tracking-[.2em] text-slate-600">Network intelligence · performance · automation</p></div></div><div className="flex gap-2"><button onClick={load} title="Refresh" className="rounded-xl border border-slate-800 p-2 text-slate-400 hover:text-white"><RefreshCw size={16} className={busy ? "animate-spin" : ""}/></button><button onClick={() => setOpen(false)} className="rounded-xl border border-slate-800 p-2 text-slate-400 hover:text-white"><X size={17}/></button></div></header>
-      <div className="flex min-h-0 flex-1"><nav className="hidden w-56 shrink-0 overflow-y-auto border-r border-slate-800 bg-slate-950/50 p-3 md:block">{tabs.map(([id, label, Icon]) => <button key={id} onClick={() => select(id)} className={`mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-xs font-semibold ${tab === id ? "bg-blue-500/10 text-blue-300 ring-1 ring-blue-500/20" : "text-slate-500 hover:bg-slate-800/50 hover:text-slate-200"}`}><Icon size={15}/>{label}</button>)}<p className="mt-5 rounded-xl border border-emerald-500/10 bg-emerald-500/5 p-3 text-[10px] leading-5 text-slate-500"><b className="text-emerald-300">SAFE AUTOMATION</b><br/>Discovery, correlation and snapshots only. No unattended device configuration changes.</p></nav>
-      <main className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6"><div className="mb-4 flex gap-2 overflow-x-auto md:hidden">{tabs.map(([id, label, Icon]) => <button key={id} onClick={() => select(id)} className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-[11px] ${tab === id ? "bg-blue-600 text-white" : "bg-slate-900 text-slate-500"}`}><Icon size={13}/>{label}</button>)}</div>{message && <div className="mb-4 flex justify-between rounded-xl border border-blue-500/20 bg-blue-500/5 px-4 py-3 text-xs text-blue-200">{message}<button onClick={() => setMessage("")}><X size={13}/></button></div>}
-        {tab === "overview" && <div className="space-y-5"><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Active incidents" value={k.activeIncidents ?? "—"} tone={k.activeIncidents ? "amber" : "green"}/><Metric label="Down devices" value={k.downDevices ?? "—"} tone="red"/><Metric label="Degraded devices" value={k.degradedDevices ?? "—"} tone="amber"/><Metric label="Peak utilization" value={`${Number(k.peakUtilization || 0).toFixed(1)}%`}/></div><Card><h3 className="font-semibold text-white">Operational snapshot</h3><p className="mt-2 text-sm text-slate-500">Phase 4 brings topology, correlation, RCA, interface health, analytics, configuration drift, safe automation and evidence-first troubleshooting into one command surface.</p></Card></div>}
-        {tab === "topology" && <div className="space-y-5"><Card><Badge tone="red">4.1 Critical</Badge><h3 className="mt-3 text-xl font-semibold text-white">Network topology discovery</h3><p className="mt-2 text-sm text-slate-500">Run CDP/LLDP discovery on demand. The existing interactive SVG topology remains the visual drill-down surface.</p><button onClick={() => action("topology")} className="mt-5 rounded-xl bg-blue-600 px-4 py-3 text-xs font-bold text-white">Discover topology</button></Card></div>}
-        {tab === "correlation" && <div className="space-y-5"><Card><Badge tone="red">4.2 Critical</Badge><h3 className="mt-3 text-xl font-semibold text-white">Incident correlation & suppression</h3><p className="mt-2 text-sm text-slate-500">Identify likely root incidents and downstream symptoms using topology proximity, severity, device state and timing.</p><button onClick={() => select("correlation")} className="mt-5 rounded-xl bg-blue-600 px-4 py-3 text-xs font-bold text-white">Rebuild correlation</button></Card>{data?.groups && <div className="grid gap-3 sm:grid-cols-3"><Metric label="Active" value={data.activeIncidents}/><Metric label="Groups" value={data.correlatedGroups}/><Metric label="Suppressed children" value={data.suppressedChildren} tone="amber"/></div>}</div>}
-        {tab === "rca" && <div className="space-y-4"><Badge tone="red">4.3 Critical</Badge><h3 className="text-xl font-semibold text-white">Root-cause analysis</h3>{(data?.analyses || []).map(a => <Card key={a.incidentId}><div className="flex flex-wrap gap-2"><span className="font-mono text-white">{a.incidentId}</span><Badge tone={a.confidence >= 80 ? "green" : "amber"}>{a.confidence}%</Badge></div><h4 className="mt-3 font-semibold text-blue-200">{a.cause}</h4><p className="mt-2 text-xs text-slate-500">{a.nextAction}</p></Card>)}</div>}
-        {tab === "health" && <div className="space-y-5"><Badge tone="amber">4.5 High</Badge><h3 className="text-xl font-semibold text-white">Advanced interface health</h3><div className="grid gap-3 sm:grid-cols-3"><Metric label="Average utilization" value={`${Number(k.avgUtilization || 0).toFixed(1)}%`}/><Metric label="Peak utilization" value={`${Number(k.peakUtilization || 0).toFixed(1)}%`}/><Metric label="Errors + discards" value={k.interfaceErrors ?? "—"} tone={k.interfaceErrors ? "red" : "green"}/></div></div>}
-        {tab === "analytics" && <div className="space-y-5"><Badge tone="amber">4.6 High</Badge><h3 className="text-xl font-semibold text-white">Historical analytics</h3><div className="grid gap-3 sm:grid-cols-3"><Metric label="Incidents" value={data?.summary?.incidentCount ?? "—"}/><Metric label="Samples" value={data?.summary?.sampleCount ?? "—"}/><Metric label="Average utilization" value={`${Number(data?.summary?.averageUtilization || 0).toFixed(1)}%`}/></div><Card><div className="flex h-48 items-end gap-1">{(data?.timeline || []).map(p => <div key={p.time} title={`${p.incidents} incidents`} className="flex-1 rounded-t bg-blue-500/50" style={{ height: `${Math.max(4, Math.min(100, p.incidents * 20))}%` }}/>)}</div></Card></div>}
-        {tab === "changes" && <div className="space-y-4"><Badge tone="amber">4.8 Medium</Badge><h3 className="text-xl font-semibold text-white">Configuration change detection</h3><p className="text-sm text-slate-500">Capture and compare device configuration fingerprints.</p><button onClick={() => select("changes")} className="rounded-xl border border-slate-700 px-4 py-3 text-xs font-bold text-white">Refresh changes</button>{(data?.changes || []).map(c => <Card key={`${c.deviceId}-${c.capturedAt}`}><div className="flex justify-between"><b className="text-white">{c.hostname}</b><Badge tone="amber">Changed</Badge></div><p className="mt-2 text-xs text-slate-500">{c.changes.join(" · ")}</p></Card>)}</div>}
-        {tab === "automation" && <div className="space-y-5"><Badge tone="amber">4.9 Medium</Badge><h3 className="text-xl font-semibold text-white">Network automation</h3><div className="grid gap-3 sm:grid-cols-2"><button onClick={() => action("correlate")} className="rounded-2xl border border-slate-800 bg-slate-900 p-5 text-left hover:border-blue-500/30"><GitBranch className="text-blue-300"/><b className="mt-4 block text-white">Re-correlate incidents</b><span className="text-xs text-slate-600">Rebuild root/child relationships.</span></button><button onClick={() => action("topology")} className="rounded-2xl border border-slate-800 bg-slate-900 p-5 text-left hover:border-blue-500/30"><Network className="text-blue-300"/><b className="mt-4 block text-white">Discover topology</b><span className="text-xs text-slate-600">Refresh CDP/LLDP evidence.</span></button></div></div>}
-        {tab === "assistant" && <div className="space-y-5"><Badge tone="green">4.10 Later</Badge><h3 className="text-xl font-semibold text-white">AI troubleshooting assistant</h3><Card><div className="flex gap-2"><input value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={e => e.key === "Enter" && ask()} className="form-input flex-1"/><button onClick={ask} className="rounded-xl bg-blue-600 px-4 text-white"><Bot size={15}/></button></div>{data?.answer && <div className="mt-5 rounded-xl border border-blue-500/15 bg-blue-500/5 p-4 text-sm leading-6 text-slate-300">{data.answer}</div>}</Card></div>}
-      </main></div>
-    </div></div>}
+    <button onClick={() => setOpen(true)} className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 inline-flex items-center gap-2 rounded-2xl border border-blue-400/20 bg-blue-600 px-4 py-3 text-xs font-bold text-white shadow-2xl shadow-blue-950/40 transition hover:-translate-y-0.5 hover:bg-blue-500" title="Open Phase 4 Operations Suite"><Sparkles size={15}/><span>Phase 4</span><span className="hidden sm:inline">Operations</span></button>
+
+    {open && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/75 p-3 backdrop-blur-sm sm:p-6">
+      <div className="flex h-[min(94vh,900px)] w-full max-w-[1500px] flex-col overflow-hidden rounded-3xl border border-slate-700 bg-[#060b14] shadow-2xl">
+        <header className="flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-950/90 px-4 py-4 sm:px-5">
+          <div className="flex min-w-0 items-center gap-3"><div className="rounded-xl bg-blue-600/15 p-2 text-blue-300"><Zap size={18}/></div><div className="min-w-0"><h2 className="truncate font-semibold text-white">Phase 4 Operations Suite</h2><p className="hidden text-[10px] uppercase tracking-[.2em] text-slate-600 sm:block">Network intelligence · performance · automation</p></div></div>
+          <div className="flex gap-2"><button onClick={loadOverview} title="Refresh overview" className="rounded-xl border border-slate-800 p-2 text-slate-400 hover:text-white"><RefreshCw size={16} className={busy ? "animate-spin" : ""}/></button><button onClick={() => setOpen(false)} title="Close" className="rounded-xl border border-slate-800 p-2 text-slate-400 hover:text-white"><X size={17}/></button></div>
+        </header>
+
+        <div className="flex min-h-0 flex-1">
+          <nav className="hidden w-56 shrink-0 overflow-y-auto border-r border-slate-800 bg-slate-950/50 p-3 md:block">
+            <p className="px-3 pb-2 text-[9px] font-bold uppercase tracking-[.2em] text-slate-700">Operations</p>
+            {tabs.map(([id, label, Icon]) => <button key={id} onClick={() => select(id)} className={`mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-xs font-semibold transition ${tab === id ? "bg-blue-500/10 text-blue-300 ring-1 ring-blue-500/20" : "text-slate-500 hover:bg-slate-800/50 hover:text-slate-200"}`}><Icon size={15}/>{label}</button>)}
+            <div className="mt-5 rounded-xl border border-emerald-500/10 bg-emerald-500/5 p-3 text-[10px] leading-5 text-slate-500"><b className="text-emerald-300">SAFE AUTOMATION</b><br/>Discovery, correlation and snapshots only. No unattended device configuration changes.</div>
+          </nav>
+
+          <main className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+            <div className="mb-4 flex gap-2 overflow-x-auto pb-1 md:hidden">{tabs.map(([id, label, Icon]) => <button key={id} onClick={() => select(id)} className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-[11px] ${tab === id ? "bg-blue-600 text-white" : "bg-slate-900 text-slate-500"}`}><Icon size={13}/>{label}</button>)}</div>
+            {message && <div className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-blue-500/20 bg-blue-500/5 px-4 py-3 text-xs text-blue-200"><span>{message}</span><button onClick={() => setMessage("")}><X size={13}/></button></div>}
+            {busy && <div className="mb-4 flex items-center gap-2 text-[10px] uppercase tracking-widest text-slate-600"><RefreshCw size={12} className="animate-spin"/>Updating operations data…</div>}
+
+            {tab === "overview" && <div className="space-y-5"><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Active incidents" value={k.activeIncidents ?? "—"} tone={k.activeIncidents ? "amber" : "green"}/><Metric label="Down devices" value={k.downDevices ?? "—"} tone="red"/><Metric label="Degraded devices" value={k.degradedDevices ?? "—"} tone="amber"/><Metric label="Peak utilization" value={`${Number(k.peakUtilization || 0).toFixed(1)}%`}/></div><Card><div className="flex flex-wrap items-center justify-between gap-3"><div><Badge tone="blue">Command center</Badge><h3 className="mt-3 text-xl font-semibold text-white">One place for Phase 4 operations</h3><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">Topology, incident correlation, RCA, interface health, analytics, configuration drift, safe automation and evidence-first troubleshooting are now launched from this surface instead of competing for dashboard space.</p></div><div className="flex flex-wrap gap-2"><button onClick={() => openWorkspace("topology")} className="inline-flex items-center gap-2 rounded-xl border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:border-blue-500/30 hover:text-white"><Network size={14}/>Topology workspace</button><button onClick={() => { setTab("rca"); select("rca"); }} className="inline-flex items-center gap-2 rounded-xl border border-purple-500/20 bg-purple-500/5 px-3 py-2 text-xs font-semibold text-purple-300 hover:bg-purple-500/10"><ShieldAlert size={14}/>Open RCA</button></div></div></Card></div>}
+
+            {tab === "topology" && <div className="space-y-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><Badge tone="red">4.1 Critical</Badge><h3 className="mt-3 text-xl font-semibold text-white">Network topology discovery</h3><p className="mt-2 text-sm text-slate-500">The topology workspace performs CDP/LLDP discovery and provides the interactive SVG, device-path traceroute and Nmap workflow.</p></div><button onClick={() => openWorkspace("topology")} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-xs font-bold text-white hover:bg-blue-500"><Network size={15}/>Open topology workspace</button></div><Card><div className="grid gap-3 sm:grid-cols-3"><Metric label="Registered devices" value={overview?.devices?.length ?? "—"}/><Metric label="Down devices" value={k.downDevices ?? "—"} tone="red"/><Metric label="Monitoring state" value={overview ? "Live" : "Waiting"} tone={overview ? "green" : "amber"}/></div><button onClick={() => action("topology")} className="mt-4 rounded-xl border border-slate-700 px-4 py-3 text-xs font-bold text-slate-200 hover:border-blue-500/30">Refresh discovery evidence</button></Card></div>}
+
+            {tab === "correlation" && <div className="space-y-5"><div><Badge tone="red">4.2 Critical</Badge><h3 className="mt-3 text-xl font-semibold text-white">Incident correlation & suppression</h3><p className="mt-2 text-sm text-slate-500">Topology proximity, device state, severity and incident timing are used to identify roots and downstream symptoms.</p></div><div className="grid gap-3 sm:grid-cols-3"><Metric label="Active" value={data?.activeIncidents ?? "—"}/><Metric label="RCA groups" value={data?.correlatedGroups ?? "—"}/><Metric label="Suppressed symptoms" value={data?.suppressedChildren ?? "—"} tone="amber"/></div><button onClick={() => action("correlate")} className="rounded-xl bg-blue-600 px-4 py-3 text-xs font-bold text-white hover:bg-blue-500">Rebuild correlation from fresh topology</button>{groups.map(group => <Card key={group.correlationGroupId}><div className="flex flex-wrap items-center gap-2"><span className="font-mono text-xs font-bold text-white">{group.correlationGroupId}</span><Badge tone="red">ROOT {group.rootIncidentId}</Badge><Badge tone="amber">Blast radius {group.blastRadius + 1}</Badge></div><p className="mt-3 text-sm text-slate-300">{group.rootDevice}</p><div className="mt-3 space-y-2">{group.children.map(child => <div key={child.incidentId} className="rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-xs"><div className="flex flex-wrap justify-between gap-2"><span className="font-mono text-white">{child.incidentId}</span><span className="text-emerald-300">{child.confidence}% confidence · {child.hops} hop(s)</span></div><p className="mt-1 text-slate-600">{child.device}</p></div>)}</div></Card>)}</div>}
+
+            {tab === "rca" && <div className="space-y-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><Badge tone="red">4.3 Critical</Badge><h3 className="mt-3 text-xl font-semibold text-white">Root-cause analysis</h3><p className="mt-2 text-sm text-slate-500">Evidence is tied to topology-aware correlation. Root incidents are separated from downstream symptoms and the blast radius is shown explicitly.</p></div><button onClick={() => select("rca")} className="rounded-xl border border-slate-700 px-4 py-3 text-xs font-bold text-white hover:border-purple-500/30">Re-run RCA</button></div><div className="grid gap-3 sm:grid-cols-3"><Metric label="Active incidents" value={data?.activeIncidents ?? "—"}/><Metric label="Correlated groups" value={data?.correlatedGroups ?? "—"}/><Metric label="Suppressed symptoms" value={data?.suppressedChildren ?? "—"} tone="amber"/></div>{analyses.length ? analyses.map(a => <Card key={a.incidentId}><div className="flex flex-wrap items-center gap-2"><span className="font-mono text-white">{a.incidentId}</span><Badge tone={a.role === "ROOT" ? "red" : a.role === "CHILD" ? "amber" : "blue"}>{a.role}</Badge><Badge tone={a.confidence >= 80 ? "green" : "amber"}>{a.confidence}% confidence</Badge></div><h4 className="mt-3 font-semibold text-blue-200">{a.cause}</h4><p className="mt-1 text-xs text-slate-500">Device: {a.device} · Blast radius: {a.blastRadius}</p><div className="mt-3 space-y-1">{(a.evidence || []).map((e, i) => <p key={i} className="text-[11px] text-slate-500">• {e}</p>)}</div>{a.topologyPath?.length > 0 && <div className="mt-3 rounded-xl border border-blue-500/10 bg-blue-500/5 p-3 text-[10px] text-blue-300">Topology path: {a.topologyPath.map((edge, i) => <span key={`${edge.source}-${edge.target}-${i}`}>{i ? " → " : ""}{edge.sourceInterface || edge.source} / {edge.targetInterface || edge.target}</span>)}</div>}<p className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-400">Next: {a.nextAction}</p></Card>) : <Card><div className="py-10 text-center text-sm text-slate-600">No active RCA analysis is available. Click Re-run RCA to build fresh topology evidence.</div></Card>}</div>}
+
+            {tab === "health" && <div className="space-y-5"><Badge tone="amber">4.5 High</Badge><h3 className="text-xl font-semibold text-white">Advanced interface health</h3><div className="grid gap-3 sm:grid-cols-3"><Metric label="Average utilization" value={`${Number(k.avgUtilization || 0).toFixed(1)}%`}/><Metric label="Peak utilization" value={`${Number(k.peakUtilization || 0).toFixed(1)}%`}/><Metric label="Errors + discards" value={k.interfaceErrors ?? "—"} tone={k.interfaceErrors ? "red" : "green"}/></div><Card><p className="text-sm text-slate-500">Use the dedicated Interface Health workspace for interface selection, historical samples, slow-link signals and detailed error counters.</p></Card></div>}
+
+            {tab === "analytics" && <div className="space-y-5"><Badge tone="amber">4.6 High</Badge><h3 className="text-xl font-semibold text-white">Historical analytics</h3><div className="grid gap-3 sm:grid-cols-3"><Metric label="Incidents" value={data?.summary?.incidentCount ?? "—"}/><Metric label="Samples" value={data?.summary?.sampleCount ?? "—"}/><Metric label="Average utilization" value={`${Number(data?.summary?.averageUtilization || 0).toFixed(1)}%`}/></div><Card><h4 className="text-xs font-bold uppercase tracking-widest text-slate-600">Incident timeline · 24h</h4><div className="mt-5 flex h-48 items-end gap-1">{(data?.timeline || []).map(point => <div key={point.time} title={`${point.incidents} incidents`} className="min-w-[3px] flex-1 rounded-t bg-blue-500/50" style={{ height: `${Math.max(4, Math.min(100, point.incidents * 20))}%` }}/>)}</div></Card></div>}
+
+            {tab === "changes" && <div className="space-y-5"><Badge tone="amber">4.8 Medium</Badge><h3 className="text-xl font-semibold text-white">Configuration change detection</h3><p className="text-sm text-slate-500">Compare device configuration fingerprints without making unattended configuration changes.</p><button onClick={() => select("changes")} className="rounded-xl border border-slate-700 px-4 py-3 text-xs font-bold text-white">Refresh changes</button>{(data?.changes || []).map(change => <Card key={`${change.deviceId}-${change.capturedAt}`}><div className="flex flex-wrap justify-between gap-2"><b className="text-white">{change.hostname}</b><Badge tone="amber">Changed</Badge></div><p className="mt-2 text-xs text-slate-500">{change.changes?.join(" · ")}</p></Card>)}</div>}
+
+            {tab === "automation" && <div className="space-y-5"><Badge tone="amber">4.9 Medium</Badge><h3 className="text-xl font-semibold text-white">Network automation</h3><div className="grid gap-3 sm:grid-cols-2"><button onClick={() => action("correlate")} className="rounded-2xl border border-slate-800 bg-slate-900 p-5 text-left transition hover:-translate-y-0.5 hover:border-blue-500/30"><GitBranch className="text-blue-300"/><b className="mt-4 block text-white">Re-correlate incidents</b><span className="text-xs text-slate-600">Refresh topology evidence and rebuild root/child relationships.</span></button><button onClick={() => action("topology")} className="rounded-2xl border border-slate-800 bg-slate-900 p-5 text-left transition hover:-translate-y-0.5 hover:border-blue-500/30"><Network className="text-blue-300"/><b className="mt-4 block text-white">Discover topology</b><span className="text-xs text-slate-600">Refresh CDP/LLDP evidence from registered SNMP devices.</span></button></div></div>}
+
+            {tab === "assistant" && <div className="space-y-5"><Badge tone="green">4.10 Later</Badge><h3 className="text-xl font-semibold text-white">AI troubleshooting assistant</h3><Card><div className="flex flex-col gap-2 sm:flex-row"><input value={question} onChange={event => setQuestion(event.target.value)} onKeyDown={event => event.key === "Enter" && ask()} className="form-input flex-1"/><button onClick={ask} className="rounded-xl bg-blue-600 px-4 py-3 text-white hover:bg-blue-500"><Bot size={15}/></button></div>{data?.answer && <div className="mt-5 rounded-xl border border-blue-500/15 bg-blue-500/5 p-4 text-sm leading-6 text-slate-300">{data.answer}</div>}{data?.evidence && <div className="mt-4 grid gap-2 sm:grid-cols-4">{Object.entries(data.evidence).map(([key, value]) => <Metric key={key} label={key.replaceAll(/([A-Z])/g, " $1")} value={value}/>)}</div>}</Card></div>}
+          </main>
+        </div>
+      </div>
+    </div>}
   </>;
 }
