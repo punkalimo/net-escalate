@@ -15,6 +15,10 @@ function authProtocol(value) {
   const protocol = String(value || "SHA").toUpperCase();
   if (protocol === "MD5") return snmp.AuthProtocols.md5;
   if (protocol === "SHA" || protocol === "SHA1") return snmp.AuthProtocols.sha;
+  if (protocol === "SHA224") return snmp.AuthProtocols.sha224;
+  if (protocol === "SHA256") return snmp.AuthProtocols.sha256;
+  if (protocol === "SHA384") return snmp.AuthProtocols.sha384;
+  if (protocol === "SHA512") return snmp.AuthProtocols.sha512;
   throw new Error(`Unsupported SNMP authentication protocol: ${value}`);
 }
 
@@ -22,7 +26,16 @@ function privProtocol(value) {
   const protocol = String(value || "AES").toUpperCase();
   if (protocol === "DES") return snmp.PrivProtocols.des;
   if (protocol === "AES" || protocol === "AES128") return snmp.PrivProtocols.aes;
+  if (protocol === "AES256B") return snmp.PrivProtocols.aes256b;
+  if (protocol === "AES256R") return snmp.PrivProtocols.aes256r;
   throw new Error(`Unsupported SNMP privacy protocol: ${value}`);
+}
+
+function securityLevel(value) {
+  const level = String(value || "noAuthNoPriv");
+  const levels = snmp.SecurityLevel || {};
+  if (!levels[level]) throw new Error(`Unsupported SNMPv3 security level: ${level}`);
+  return levels[level];
 }
 
 function createSnmpSession(device) {
@@ -52,32 +65,28 @@ function createSnmpSession(device) {
   const username = String(device.snmp?.username || "").trim();
   if (!username) throw new Error("SNMPv3 username is required.");
 
-  const securityLevel = device.snmp?.securityLevel || "noAuthNoPriv";
+  const levelName = device.snmp?.securityLevel || "noAuthNoPriv";
   const user = {
     name: username,
-    level: securityLevel
+    level: securityLevel(levelName)
   };
 
-  if (securityLevel === "authNoPriv" || securityLevel === "authPriv") {
+  if (levelName === "authNoPriv" || levelName === "authPriv") {
     if (!device.snmp?.authKey) throw new Error("SNMPv3 authentication key is required.");
     user.authProtocol = authProtocol(device.snmp.authProtocol);
     user.authKey = String(device.snmp.authKey);
   }
 
-  if (securityLevel === "authPriv") {
+  if (levelName === "authPriv") {
     if (!device.snmp?.privKey) throw new Error("SNMPv3 privacy key is required.");
     user.privProtocol = privProtocol(device.snmp.privProtocol);
     user.privKey = String(device.snmp.privKey);
   }
 
-  if (!snmp.SecurityLevel?.noAuthNoPriv && securityLevel === "noAuthNoPriv") {
-    // Older net-snmp releases accept the literal security level on the user.
-    // No action is required here.
-  }
-
   return snmp.createV3Session(device.ipAddress, user, {
     timeout,
-    retries
+    retries,
+    context: String(device.snmp?.context || "")
   });
 }
 
@@ -95,7 +104,7 @@ function safeClose(session) {
 function walkSubtree(session, oid, onVarbind) {
   return new Promise((resolve, reject) => {
     let settled = false;
-    const finish = (error) => {
+    const finish = error => {
       if (settled) return;
       settled = true;
       if (error) reject(error);
@@ -134,7 +143,6 @@ export async function testSnmpConnection(device) {
     session.get(oids, (error, varbinds) => {
       safeClose(session);
       if (error) return reject(error);
-
       const information = {};
       for (const varbind of varbinds || []) {
         if (snmp.isVarbindError(varbind)) continue;
@@ -216,7 +224,6 @@ export async function discoverInterfaces(device) {
     const index = parts[parts.length - 1];
     const item = interfaces.get(index) || interfaceRecord(index);
     const value = varbind.value;
-
     switch (column) {
       case "1": item.ifIndex = Number(value); break;
       case "2": item.ifDescr = valueToString(value); break;
@@ -236,7 +243,6 @@ export async function discoverInterfaces(device) {
     const index = parts[parts.length - 1];
     const item = interfaces.get(index) || interfaceRecord(index);
     const value = varbind.value;
-
     switch (column) {
       case "1": item.ifName = valueToString(value); break;
       case "15": item.highSpeed = Number(value); break;
@@ -247,8 +253,6 @@ export async function discoverInterfaces(device) {
 
   try {
     await walkSubtree(session, tableOid, consumeIfTable);
-    // IF-MIB::ifXTable is optional. Cisco IOS, FortiGate and pfSense commonly
-    // expose it, but a compliant SNMP agent may not. Keep base ifTable data.
     try {
       await walkSubtree(session, extendedTableOid, consumeIfXTable);
     } catch (error) {
@@ -276,7 +280,6 @@ export async function getInterfaceStatus(device, ifIndex) {
   const session = createSnmpSession(device);
   const adminOid = `${IF_OIDS.adminStatus}.${ifIndex}`;
   const operOid = `${IF_OIDS.operStatus}.${ifIndex}`;
-
   return new Promise((resolve, reject) => {
     session.get([adminOid, operOid], (error, varbinds) => {
       safeClose(session);
@@ -311,14 +314,12 @@ export async function getInterfaceMetrics(device, ifIndex) {
     session.get(Object.values(oids), (error, varbinds) => {
       safeClose(session);
       if (error) return reject(error);
-
       const values = {};
       for (const varbind of varbinds || []) {
         if (snmp.isVarbindError(varbind)) continue;
         const key = Object.keys(oids).find(name => oids[name] === varbind.oid);
         if (key) values[key] = Number(varbind.value);
       }
-
       const speedMbps = speedFromValues(values.highSpeed, values.speed);
       resolve({
         ifIndex,
@@ -339,9 +340,4 @@ export async function getInterfaceMetrics(device, ifIndex) {
   });
 }
 
-export default {
-  testSnmpConnection,
-  discoverInterfaces,
-  getInterfaceStatus,
-  getInterfaceMetrics
-};
+export default { testSnmpConnection, discoverInterfaces, getInterfaceStatus, getInterfaceMetrics };
