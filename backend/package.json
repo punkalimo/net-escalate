@@ -9,7 +9,7 @@
     "dev": "nodemon src/server.js"
   },
   "dependencies": {
-    "@call-e/calle": "^0.2.0",
+    "@call-e/calle": "^0.7.0",
     "axios": "^1.19.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
