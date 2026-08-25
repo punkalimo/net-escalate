@@ -10,6 +10,7 @@ import incidentRoutes from "./routes/incidentRoutes.js";
 import technicianRoutes from "./routes/technicianRoutes.js";
 import deviceRoutes from "./routes/deviceRoutes.js";
 import interfaceRoutes from "./routes/interfaceRoutes.js";
+import topologyRoutes from "./routes/topologyRoutes.js";
 
 import { startAllDeviceMonitoring, setMonitoringSocket } from "./services/deviceMonitoringService.js";
 import { startAllInterfaceMonitoring } from "./services/interfaceMonitoringService.js";
@@ -48,6 +49,7 @@ app.use("/api/incidents", incidentRoutes(io));
 app.use("/api/technicians", technicianRoutes);
 app.use("/api/devices", deviceRoutes);
 app.use("/api/interfaces", interfaceRoutes);
+app.use("/api/topology", topologyRoutes);
 
 io.on("connection", socket => {
   console.log("Dashboard connected:", socket.id);
