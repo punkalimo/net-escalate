@@ -19,7 +19,7 @@ const interfaceSampleSchema = new mongoose.Schema(
     health: { type: String, enum: ["HEALTHY", "WARNING", "DEGRADED", "CRITICAL", "DOWN", "UNKNOWN"], default: "UNKNOWN" },
     healthScore: { type: Number, default: null },
     sampledAt: { type: Date, default: Date.now, index: true },
-    expiresAt: { type: Date, required: true, index: true }
+    expiresAt: { type: Date, required: true }
   },
   { timestamps: true }
 );
