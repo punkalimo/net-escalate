@@ -1,808 +1,186 @@
 import Technician from "../models/Technician.js";
 import { escalateToTechnician } from "./escalationService.js";
 
-
-/*
- * ========================================
- * INCIDENT ESCALATION SERVICE
- * ========================================
- *
- * Escalation flow:
- *
- * Level 1 → Level 2 → Level 3
- *
- * If technician acknowledges:
- *
- * CALLING → ACKNOWLEDGED
- *
- * If technician cannot handle the incident:
- *
- * CALLING → ESCALATING → next level
- *
- * If all levels fail:
- *
- * FAILED
- */
-
-
-/*
- * Maximum escalation level.
- */
-
 const MAX_LEVEL = 3;
 
-
-/*
- * ========================================
- * EMIT INCIDENT UPDATE
- * ========================================
- */
-
-function emitIncidentUpdate(
-  io,
-  incident
-) {
-
-  if (!io) {
-    return;
-  }
-
-  io.emit(
-    "incident_updated",
-    incident
-  );
-
+function emitIncidentUpdate(io, incident) {
+  if (io) io.emit("incident_updated", incident);
 }
 
-
-/*
- * ========================================
- * GET TECHNICIAN FOR LEVEL
- * ========================================
- */
-
-async function getTechnicianForLevel(
-  level
-) {
-
-  const technicians =
-    await Technician
-      .find({
-        level,
-        active: true
-      })
-      .sort({
-        createdAt: 1
-      });
-
-
-  if (
-    !technicians ||
-    technicians.length === 0
-  ) {
-
-    return null;
-
-  }
-
-
-  /*
-   * For now we select the first active
-   * technician at the level.
-   *
-   * Later we can implement:
-   *
-   * - round robin
-   * - availability
-   * - workload
-   * - geographical routing
-   */
-
-  return technicians[0];
-
+async function getTechnicianForLevel(level) {
+  return Technician.findOne({ level, active: true }).sort({ createdAt: 1 });
 }
 
-
-/*
- * ========================================
- * ADD ESCALATION HISTORY
- * ========================================
- */
-
-function addHistoryEntry(
-  incident,
-  technician,
-  level
-) {
-
-  const entry = {
-
+function addHistoryEntry(incident, technician, level) {
+  incident.escalationHistory.push({
     level,
-
-    technicianId:
-      technician.technicianId,
-
-    technicianName:
-      technician.name,
-
-    technicianPhone:
-      technician.phone,
-
+    technicianId: technician.technicianId,
+    technicianName: technician.name,
+    technicianPhone: technician.phone,
     callId: null,
-
+    provider: null,
+    providerCode: null,
+    providerStatus: null,
+    retryable: false,
     status: "CALLING",
-
     response: null,
-
-    startedAt:
-      new Date(),
-
+    startedAt: new Date(),
     completedAt: null
-
-  };
-
-
-  incident.escalationHistory.push(
-    entry
-  );
-
-
-  return (
-    incident.escalationHistory[
-      incident.escalationHistory.length - 1
-    ]
-  );
-
+  });
+  return incident.escalationHistory[incident.escalationHistory.length - 1];
 }
 
-
-/*
- * ========================================
- * PROCESS INCIDENT
- * ========================================
- */
-
-export async function processIncident(
-  incident,
-  io
-) {
-
+export async function processIncident(incident, io) {
   try {
+    let level = Number(incident.escalationLevel || 1);
 
-    /*
-     * Start at the incident's current
-     * escalation level.
-     */
+    while (level <= MAX_LEVEL) {
+      console.log("========================================");
+      console.log(`Processing escalation level ${level}`);
+      console.log(`Incident: ${incident.incidentId}`);
+      console.log("========================================");
 
-    let level =
-      Number(
-        incident.escalationLevel || 1
-      );
-
-
-    /*
-     * ========================================
-     * ESCALATION LOOP
-     * ========================================
-     */
-
-    while (
-      level <= MAX_LEVEL
-    ) {
-
-      console.log(
-        "========================================"
-      );
-
-      console.log(
-        `Processing escalation level ${level}`
-      );
-
-      console.log(
-        `Incident: ${incident.incidentId}`
-      );
-
-      console.log(
-        "========================================"
-      );
-
-
-      /*
-       * ========================================
-       * FIND TECHNICIAN
-       * ========================================
-       */
-
-      const technician =
-        await getTechnicianForLevel(
-          level
-        );
-
-
-      /*
-       * No technician exists at this level.
-       */
-
+      const technician = await getTechnicianForLevel(level);
       if (!technician) {
-
-        console.log(
-          `No active technician found at level ${level}.`
-        );
-
-
         level += 1;
-
-
-        /*
-         * If another level exists,
-         * continue escalation.
-         */
-
-        if (
-          level <= MAX_LEVEL
-        ) {
-
-          incident.escalationLevel =
-            level;
-
-          incident.status =
-            "ESCALATING";
-
+        if (level <= MAX_LEVEL) {
+          incident.escalationLevel = level;
+          incident.status = "ESCALATING";
           await incident.save();
-
-          emitIncidentUpdate(
-            io,
-            incident
-          );
-
+          emitIncidentUpdate(io, incident);
           continue;
-
         }
-
-
-        /*
-         * No more levels.
-         */
-
-        incident.status =
-          "FAILED";
-
-        incident.escalationLevel =
-          MAX_LEVEL;
-
+        incident.status = "FAILED";
+        incident.escalationLevel = MAX_LEVEL;
         await incident.save();
-
-        emitIncidentUpdate(
-          io,
-          incident
-        );
-
-        console.log(
-          `No technicians available. Incident ${incident.incidentId} failed.`
-        );
-
+        emitIncidentUpdate(io, incident);
         return incident;
-
       }
-
-
-      /*
-       * ========================================
-       * ASSIGN TECHNICIAN
-       * ========================================
-       */
 
       incident.technician = {
-
-        id:
-          technician.technicianId,
-
-        name:
-          technician.name,
-
-        phone:
-          technician.phone
-
+        id: technician.technicianId,
+        name: technician.name,
+        phone: technician.phone
       };
-
-
-      incident.escalationLevel =
-        level;
-
-
-      incident.status =
-        "CALLING";
-
-
+      incident.escalationLevel = level;
+      incident.status = "CALLING";
+      incident.callProvider = process.env.CALL_PROVIDER || "simulation";
+      incident.callProviderCode = null;
+      incident.callProviderMessage = null;
+      incident.callProviderRetryable = false;
       await incident.save();
+      emitIncidentUpdate(io, incident);
 
-
-      emitIncidentUpdate(
-        io,
-        incident
-      );
-
-
-      console.log(
-        `Calling Level ${level} technician: ${technician.name}`
-      );
-
-      console.log(
-        `Phone: ${technician.phone}`
-      );
-
-
-      /*
-       * ========================================
-       * CREATE HISTORY ENTRY
-       * ========================================
-       */
-
-      const history =
-        addHistoryEntry(
-          incident,
-          technician,
-          level
-        );
-
-
+      const history = addHistoryEntry(incident, technician, level);
       await incident.save();
-
-
-      emitIncidentUpdate(
-        io,
-        incident
-      );
-
-
-      /*
-       * ========================================
-       * CALL TECHNICIAN
-       * ========================================
-       */
+      emitIncidentUpdate(io, incident);
 
       let callResult;
-
-
       try {
-
-        callResult =
-          await escalateToTechnician(
-            incident
-          );
-
+        callResult = await escalateToTechnician(incident);
       } catch (error) {
-
-        console.error(
-          `Call failed at Level ${level}:`,
-          error
-        );
-
-
-        /*
-         * Mark attempt as failed.
-         */
-
-        history.status =
-          "FAILED";
-
-
-        history.response =
-          error.message ||
-          "Call provider failed.";
-
-
-        history.completedAt =
-          new Date();
-
-
+        const permanent = error?.retryable === false || ["call_not_ready", "unsupported_region", "unsupported_locale", "invalid_destination"].includes(error?.code);
+        history.status = permanent ? "PROVIDER_UNAVAILABLE" : "FAILED";
+        history.provider = incident.callProvider;
+        history.providerCode = error?.code || "provider_error";
+        history.providerStatus = error?.status || null;
+        history.retryable = error?.retryable === true;
+        history.response = error?.message || "Call provider failed.";
+        history.completedAt = new Date();
+        incident.callProviderCode = history.providerCode;
+        incident.callProviderMessage = history.response;
+        incident.callProviderRetryable = history.retryable;
+        incident.status = "FAILED";
         await incident.save();
+        emitIncidentUpdate(io, incident);
 
-
-        emitIncidentUpdate(
-          io,
-          incident
-        );
-
-
-        /*
-         * Move to next level.
-         */
-
-        level += 1;
-
-
-        if (
-          level <= MAX_LEVEL
-        ) {
-
-          incident.escalationLevel =
-            level;
-
-          incident.status =
-            "ESCALATING";
-
-          await incident.save();
-
-          emitIncidentUpdate(
-            io,
-            incident
-          );
-
-          continue;
-
+        // A permanent provider capability failure is not a technician failure.
+        // Do not call the same unsupported destination at Levels 2/3.
+        if (permanent) {
+          console.warn(`CALL provider unavailable for ${incident.incidentId}; escalation stopped.`);
+          return incident;
         }
 
-
-        /*
-         * All levels exhausted.
-         */
-
-        incident.status =
-          "FAILED";
-
-        incident.escalationLevel =
-          MAX_LEVEL;
-
-        await incident.save();
-
-        emitIncidentUpdate(
-          io,
-          incident
-        );
-
+        level += 1;
+        if (level <= MAX_LEVEL) {
+          incident.escalationLevel = level;
+          incident.status = "ESCALATING";
+          await incident.save();
+          emitIncidentUpdate(io, incident);
+          continue;
+        }
         return incident;
-
       }
 
+      incident.calleCallId = callResult?.id || null;
+      history.callId = incident.calleCallId;
+      history.provider = incident.callProvider;
+      history.providerCode = callResult?.failureCode || null;
+      history.providerStatus = null;
 
-      /*
-       * ========================================
-       * SAVE CALL ID
-       * ========================================
-       */
-
-      incident.calleCallId =
-        callResult?.id ||
-        null;
-
-
-      history.callId =
-        incident.calleCallId;
-
-
-      /*
-       * ========================================
-       * READ CALL RESULT
-       * ========================================
-       */
-
-      const result =
-        callResult?.structuredResult ||
-        {};
-
-
-      const acknowledged =
-        result.acknowledged === true &&
-        result.technician_available === true;
-
-
-      const escalationRequired =
-        result.escalation_required === true;
-
-
-      /*
-       * ========================================
-       * TECHNICIAN ACKNOWLEDGED
-       * ========================================
-       */
+      const result = callResult?.structuredResult || {};
+      const acknowledged = result.acknowledged === true && result.technician_available === true;
+      const escalationRequired = result.escalation_required === true;
 
       if (acknowledged) {
-
-        incident.status =
-          "ACKNOWLEDGED";
-
-
-        incident.acknowledgement =
-          result.technician_response ||
-          "Technician acknowledged the incident.";
-
-
-        history.status =
-          "ACKNOWLEDGED";
-
-
-        history.response =
-          incident.acknowledgement;
-
-
-        history.completedAt =
-          new Date();
-
-
+        incident.status = "ACKNOWLEDGED";
+        incident.acknowledgement = result.technician_response || "Technician acknowledged the incident.";
+        history.status = "ACKNOWLEDGED";
+        history.response = incident.acknowledgement;
+        history.completedAt = new Date();
         await incident.save();
-
-
-        emitIncidentUpdate(
-          io,
-          incident
-        );
-
-
-        console.log(
-          "========================================"
-        );
-
-        console.log(
-          `Incident ${incident.incidentId} acknowledged.`
-        );
-
-        console.log(
-          `Technician: ${technician.name}`
-        );
-
-        console.log(
-          "========================================"
-        );
-
-
-        /*
-         * IMPORTANT:
-         *
-         * Stop escalation immediately.
-         */
-
+        emitIncidentUpdate(io, incident);
+        console.log(`Incident ${incident.incidentId} acknowledged by ${technician.name}.`);
         return incident;
-
       }
-
-
-      /*
-       * ========================================
-       * ESCALATION REQUIRED
-       * ========================================
-       */
 
       if (escalationRequired) {
-
-        history.status =
-          "ESCALATED";
-
-
-        history.response =
-          result.technician_response ||
-          "Technician unavailable. Escalation required.";
-
-
-        history.completedAt =
-          new Date();
-
-
+        history.status = "ESCALATED";
+        history.response = result.technician_response || "Technician unavailable. Escalation required.";
+        history.completedAt = new Date();
         await incident.save();
-
-
-        emitIncidentUpdate(
-          io,
-          incident
-        );
-
-
-        console.log(
-          `Level ${level} technician could not handle incident.`
-        );
-
-
-        /*
-         * Move to next level.
-         */
-
+        emitIncidentUpdate(io, incident);
         level += 1;
-
-
-        /*
-         * More levels available.
-         */
-
-        if (
-          level <= MAX_LEVEL
-        ) {
-
-          incident.escalationLevel =
-            level;
-
-          incident.status =
-            "ESCALATING";
-
+        if (level <= MAX_LEVEL) {
+          incident.escalationLevel = level;
+          incident.status = "ESCALATING";
           await incident.save();
-
-          emitIncidentUpdate(
-            io,
-            incident
-          );
-
-
+          emitIncidentUpdate(io, incident);
           continue;
-
         }
-
-
-        /*
-         * No more levels.
-         */
-
-        incident.status =
-          "FAILED";
-
-        incident.escalationLevel =
-          MAX_LEVEL;
-
+      } else {
+        history.status = "FAILED";
+        history.response = result.technician_response || "Call completed without a clear acknowledgement.";
+        history.completedAt = new Date();
         await incident.save();
-
-        emitIncidentUpdate(
-          io,
-          incident
-        );
-
-
-        console.log(
-          `Incident ${incident.incidentId} exhausted all escalation levels.`
-        );
-
-
-        return incident;
-
+        emitIncidentUpdate(io, incident);
+        level += 1;
+        if (level <= MAX_LEVEL) {
+          incident.escalationLevel = level;
+          incident.status = "ESCALATING";
+          await incident.save();
+          emitIncidentUpdate(io, incident);
+          continue;
+        }
       }
 
-
-      /*
-       * ========================================
-       * UNCLEAR CALL RESULT
-       * ========================================
-       */
-
-      history.status =
-        "FAILED";
-
-
-      history.response =
-        result.technician_response ||
-        "Call completed without a clear acknowledgement.";
-
-
-      history.completedAt =
-        new Date();
-
-
+      incident.status = "FAILED";
+      incident.escalationLevel = MAX_LEVEL;
       await incident.save();
-
-
-      emitIncidentUpdate(
-        io,
-        incident
-      );
-
-
-      /*
-       * Try next level.
-       */
-
-      level += 1;
-
-
-      if (
-        level <= MAX_LEVEL
-      ) {
-
-        incident.escalationLevel =
-          level;
-
-        incident.status =
-          "ESCALATING";
-
-        await incident.save();
-
-        emitIncidentUpdate(
-          io,
-          incident
-        );
-
-        continue;
-
-      }
-
-
-      /*
-       * ========================================
-       * ALL LEVELS EXHAUSTED
-       * ========================================
-       */
-
-      incident.status =
-        "FAILED";
-
-      incident.escalationLevel =
-        MAX_LEVEL;
-
-
-      await incident.save();
-
-
-      emitIncidentUpdate(
-        io,
-        incident
-      );
-
-
+      emitIncidentUpdate(io, incident);
       return incident;
-
     }
 
-
-    /*
-     * ========================================
-     * SAFETY FALLBACK
-     * ========================================
-     */
-
-    incident.status =
-      "FAILED";
-
-    incident.escalationLevel =
-      MAX_LEVEL;
-
-
+    incident.status = "FAILED";
+    incident.escalationLevel = MAX_LEVEL;
     await incident.save();
-
-
-    emitIncidentUpdate(
-      io,
-      incident
-    );
-
-
+    emitIncidentUpdate(io, incident);
     return incident;
-
-
   } catch (error) {
-
-    /*
-     * ========================================
-     * UNEXPECTED ERROR
-     * ========================================
-     */
-
-    console.error(
-      "========================================"
-    );
-
-    console.error(
-      "INCIDENT PROCESSING ERROR"
-    );
-
-    console.error(
-      error
-    );
-
-    console.error(
-      "========================================"
-    );
-
-
-    incident.status =
-      "FAILED";
-
-
+    console.error("INCIDENT PROCESSING ERROR:", error);
+    incident.status = "FAILED";
     await incident.save();
-
-
-    emitIncidentUpdate(
-      io,
-      incident
-    );
-
-
+    emitIncidentUpdate(io, incident);
     throw error;
-
   }
-
 }
