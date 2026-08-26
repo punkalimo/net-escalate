@@ -61,18 +61,27 @@ async function saveSample(device, iface) {
   });
 }
 
+function dedupeByIfIndex(interfaces) {
+  const byIndex = new Map();
+  for (const item of interfaces) byIndex.set(Number(item.ifIndex), item);
+  return [...byIndex.values()];
+}
+
 export async function pollDeviceInterfaces(deviceId) {
   const device = await Device.findOne({ deviceId });
   if (!device) throw new Error("Device not found.");
   if (!device.snmp?.enabled) return { success: true, skipped: true, reason: "SNMP monitoring is disabled.", device };
 
-  let interfaces = Array.isArray(device.interfaces) ? device.interfaces : [];
+  // A concurrent poll (e.g. overlapping server restarts) can leave duplicate
+  // entries for the same ifIndex; collapse them before processing so the
+  // duplication can't perpetuate itself across polls.
+  let interfaces = dedupeByIfIndex(Array.isArray(device.interfaces) ? device.interfaces : []);
   const needsDiscovery = interfaces.length === 0 || interfaces.some(item => !item.ifIndex);
   if (needsDiscovery) {
     const discovered = await discoverInterfaces(device);
     interfaces = mergeDiscoveredInterfaces(interfaces, discovered);
-    device.interfaces = interfaces;
   }
+  device.interfaces = interfaces;
 
   const now = new Date();
   const updatedInterfaces = [];

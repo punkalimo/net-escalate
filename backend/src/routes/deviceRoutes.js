@@ -9,6 +9,8 @@ import {
     restartDeviceMonitoring
 } from "../services/deviceMonitoringService.js";
 
+import { startInterfaceMonitoring } from "../services/interfaceMonitoringService.js";
+
 const router = express.Router();
 
 function generateDeviceId() {
@@ -459,6 +461,15 @@ router.post(
                         monitoringError
                     );
                 }
+
+                startInterfaceMonitoring(
+                    device
+                ).catch((interfaceMonitoringError) => {
+                    console.error(
+                        "INTERFACE MONITORING START ERROR:",
+                        interfaceMonitoringError
+                    );
+                });
             }
 
             return res.status(201).json({
@@ -764,6 +775,15 @@ router.patch(
             await restartDeviceMonitoring(
                 device.deviceId
             );
+
+            startInterfaceMonitoring(
+                device
+            ).catch((interfaceMonitoringError) => {
+                console.error(
+                    "INTERFACE MONITORING START ERROR:",
+                    interfaceMonitoringError
+                );
+            });
 
             return res.json({
                 success: true,
