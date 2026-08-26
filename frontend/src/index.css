@@ -1,205 +1,41 @@
 @import "tailwindcss";
 
-:root {
-  font-family: Inter, system-ui, sans-serif;
-  background: #070b12;
-  color: #e5e7eb;
-}
-
+:root { font-family: Inter, system-ui, sans-serif; background: #070b12; color: #e5e7eb; }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; background: #070b12; }
-
-.form-input {
-  width: 100%;
-  border-radius: 0.5rem;
-  border: 1px solid rgb(51 65 85);
-  background: rgb(15 23 42);
-  padding: 0.75rem 1rem;
-  font-size: 0.875rem;
-  color: white;
-  outline: none;
-}
+.form-input { width: 100%; border-radius: .5rem; border: 1px solid rgb(51 65 85); background: rgb(15 23 42); padding: .75rem 1rem; font-size: .875rem; color: white; outline: none; }
 .form-input::placeholder { color: rgb(71 85 105); }
 .form-input:focus { border-color: rgb(59 130 246); }
 
-/* Incidents: one bounded three-row command header. */
-section:has(input[placeholder^="Search ID, device, location, technician"]) {
-  width: 100% !important;
-  max-width: none !important;
-  min-width: 0 !important;
-  overflow: visible !important;
-}
-
-section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child {
-  width: 100% !important;
-  max-width: none !important;
-  min-width: 0 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  overflow: visible !important;
-}
+/* Incidents command header: one bounded, vertically ordered layout. */
+section:has(input[placeholder^="Search ID, device, location, technician"]) { width: 100% !important; max-width: none !important; min-width: 0 !important; overflow: visible !important; }
+section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child { width: 100% !important; max-width: none !important; min-width: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; }
 
 /* Search row */
-section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child {
-  width: 100% !important;
-  display: flex !important;
-  flex-direction: column !important;
-  align-items: stretch !important;
-  gap: 0 !important;
-  margin: 0 !important;
-  padding: 18px 20px 16px !important;
-  overflow: visible !important;
-}
+section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child { display: flex !important; flex-direction: column !important; align-items: stretch !important; width: 100% !important; margin: 0 !important; padding: 20px 20px 18px !important; gap: 0 !important; overflow: visible !important; }
+section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:first-child { position: relative !important; display: block !important; width: 100% !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; }
+section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:first-child::before { content: "SEARCH INCIDENTS"; display: block; margin: 0 0 9px; color: rgb(100 116 139); font-size: 10px; line-height: 14px; font-weight: 700; letter-spacing: .16em; }
+section:has(input[placeholder^="Search ID, device, location, technician"]) input[placeholder^="Search ID, device, location, technician"] { display: block !important; width: 100% !important; height: 46px !important; min-height: 46px !important; margin: 0 !important; padding: 0 16px 0 52px !important; border-radius: 10px !important; border: 1px solid rgb(51 65 85 / .9) !important; background: rgb(2 6 23 / .78) !important; color: rgb(226 232 240) !important; font-size: 13px !important; line-height: 46px !important; text-align: left !important; outline: none !important; }
+section:has(input[placeholder^="Search ID, device, location, technician"]) input[placeholder^="Search ID, device, location, technician"]:focus { border-color: rgb(59 130 246 / .75) !important; box-shadow: 0 0 0 3px rgb(59 130 246 / .08) !important; }
+section:has(input[placeholder^="Search ID, device, location, technician"]) input[placeholder^="Search ID, device, location, technician"] ~ svg { position: absolute !important; left: 18px !important; top: 38px !important; width: 18px !important; height: 18px !important; margin: 0 !important; pointer-events: none !important; transform: none !important; z-index: 2 !important; }
 
-section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:first-child {
-  position: relative !important;
-  display: block !important;
-  width: 100% !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  overflow: visible !important;
-}
-
-section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:first-child::before {
-  content: "SEARCH INCIDENTS";
-  display: block;
-  margin: 0 0 8px;
-  color: rgb(100 116 139);
-  font-size: 10px;
-  line-height: 14px;
-  font-weight: 700;
-  letter-spacing: .16em;
-}
-
-/* The search control itself is always the full width of the row. */
-section:has(input[placeholder^="Search ID, device, location, technician"]) input[placeholder^="Search ID, device, location, technician"] {
-  display: block !important;
-  width: 100% !important;
-  height: 46px !important;
-  min-height: 46px !important;
-  margin: 0 !important;
-  padding: 0 16px 0 52px !important;
-  border-radius: 10px !important;
-  border: 1px solid rgb(51 65 85 / .9) !important;
-  background: rgb(2 6 23 / .78) !important;
-  color: rgb(226 232 240) !important;
-  font-size: 13px !important;
-  line-height: 46px !important;
-  text-align: left !important;
-  outline: none !important;
-}
-
-section:has(input[placeholder^="Search ID, device, location, technician"]) input[placeholder^="Search ID, device, location, technician"]:focus {
-  border-color: rgb(59 130 246 / .75) !important;
-  box-shadow: 0 0 0 3px rgb(59 130 246 / .08) !important;
-}
-
-/* Keep the Lucide search icon inside the input's left inset. */
-section:has(input[placeholder^="Search ID, device, location, technician"]) input[placeholder^="Search ID, device, location, technician"] ~ svg,
-section:has(input[placeholder^="Search ID, device, location, technician"]) input[placeholder^="Search ID, device, location, technician"] + svg {
-  position: absolute !important;
-  left: 18px !important;
-  top: 37px !important;
-  width: 18px !important;
-  height: 18px !important;
-  margin: 0 !important;
-  pointer-events: none !important;
-  transform: none !important;
-  z-index: 2 !important;
-}
-
-/* Filter row: four equal controls, never vertically stretched or clipped. */
-section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:nth-child(2) {
-  display: grid !important;
-  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
-  align-items: center !important;
-  width: 100% !important;
-  min-width: 0 !important;
-  gap: 12px !important;
-  margin: 0 !important;
-  padding: 0 20px 16px !important;
-  overflow: visible !important;
-}
-
-section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:nth-child(2) > * {
-  width: 100% !important;
-  min-width: 0 !important;
-  height: 44px !important;
-  min-height: 44px !important;
-  margin: 0 !important;
-  align-self: center !important;
-}
-
+/* Filters: a genuinely separate row with breathing room above and below. */
+section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:nth-child(2) { display: grid !important; grid-template-columns: repeat(4, minmax(0, 1fr)) !important; align-items: center !important; width: 100% !important; min-width: 0 !important; gap: 16px !important; margin: 0 !important; padding: 16px 20px 18px !important; border-top: 1px solid rgb(30 41 59 / .55) !important; border-bottom: 1px solid rgb(30 41 59 / .55) !important; background: rgb(2 6 23 / .22) !important; overflow: visible !important; }
+section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:nth-child(2) > * { width: 100% !important; min-width: 0 !important; height: 44px !important; min-height: 44px !important; margin: 0 !important; align-self: center !important; }
 section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:nth-child(2) .form-input,
-section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:nth-child(2) select {
-  display: block !important;
-  width: 100% !important;
-  height: 44px !important;
-  min-height: 44px !important;
-  margin: 0 !important;
-  padding: 0 12px !important;
-  border-radius: 9px !important;
-  font-size: 12px !important;
-  line-height: 44px !important;
-  vertical-align: middle !important;
-  position: static !important;
-  top: auto !important;
-  transform: none !important;
-}
+section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:nth-child(2) select { display: block !important; width: 100% !important; height: 44px !important; min-height: 44px !important; margin: 0 !important; padding: 0 12px !important; border-radius: 9px !important; font-size: 12px !important; line-height: 44px !important; vertical-align: middle !important; position: static !important; top: auto !important; transform: none !important; }
 
-/* Match/pagination row: two anchored sides, never absolute/floating. */
-section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:last-child {
-  display: flex !important;
-  width: 100% !important;
-  min-width: 0 !important;
-  min-height: 44px !important;
-  align-items: center !important;
-  justify-content: space-between !important;
-  gap: 16px !important;
-  margin: 0 !important;
-  padding: 0 20px !important;
-  border-top: 1px solid rgb(30 41 59 / .7) !important;
-  background: transparent !important;
-  overflow: visible !important;
-  position: static !important;
-}
+/* Results row: count left, pagination right, both in normal document flow. */
+section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:last-child { display: flex !important; width: 100% !important; min-width: 0 !important; min-height: 50px !important; align-items: center !important; justify-content: space-between !important; gap: 16px !important; margin: 0 !important; padding: 10px 20px !important; border-top: 0 !important; background: transparent !important; overflow: visible !important; position: static !important; }
+section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:last-child > * { position: static !important; transform: none !important; margin: 0 !important; flex: 0 0 auto !important; }
 
-section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:last-child > * {
-  position: static !important;
-  transform: none !important;
-  margin: 0 !important;
-  flex: 0 0 auto !important;
-}
-
-@media (max-width: 900px) {
-  section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:nth-child(2) {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
-}
-
+@media (max-width: 900px) { section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:nth-child(2) { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } }
 @media (max-width: 520px) {
   section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child,
   section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:nth-child(2),
-  section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:last-child {
-    padding-left: 14px !important;
-    padding-right: 14px !important;
-  }
-
-  section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:nth-child(2) {
-    grid-template-columns: 1fr !important;
-  }
-
-  section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:last-child {
-    align-items: flex-start !important;
-    flex-direction: column !important;
-    padding-top: 10px !important;
-    padding-bottom: 10px !important;
-  }
+  section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:last-child { padding-left: 14px !important; padding-right: 14px !important; }
+  section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:first-child > div:nth-child(2) { grid-template-columns: 1fr !important; gap: 10px !important; padding-top: 14px !important; padding-bottom: 14px !important; }
+  section:has(input[placeholder^="Search ID, device, location, technician"]) > div:first-child > div:last-child { align-items: flex-start !important; flex-direction: column !important; }
 }
 
-/* Hide legacy floating launchers; sidebar navigation owns these destinations. */
-button[title="Open Root Cause Analysis"],
-button[aria-label="Phase 4 Command Center"],
-button[class~="bottom-6"][class~="right-6"] {
-  display: none !important;
-}
+button[title="Open Root Cause Analysis"], button[aria-label="Phase 4 Command Center"], button[class~="bottom-6"][class~="right-6"] { display: none !important; }
