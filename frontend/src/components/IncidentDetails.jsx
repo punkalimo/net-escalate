@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
-import { Activity, AlertTriangle, CheckCircle2, Clock3, Phone, Radio, RefreshCw, ShieldAlert, UserRound, X, Zap } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, Clock3, Phone, Radio, RefreshCw, Server, ShieldAlert, UserRound, X, Zap } from "lucide-react";
 import { getIncident, resolveIncident } from "../services/api";
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
@@ -150,6 +150,14 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                 </section>
 
                 <aside className="space-y-6">
+                  {incident?.impactedDevices?.length > 0 && <section className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
+                    <div className="flex items-center gap-2"><Server size={16} className="text-amber-400" /><h3 className="font-semibold text-white">Impacted devices ({incident.impactedDevices.length})</h3></div>
+                    <p className="mt-1 text-xs text-slate-500">Downstream of {incident.device} in the topology - suppressed here instead of paging separately.</p>
+                    <div className="mt-4 space-y-2">{incident.impactedDevices.map(d => <div key={d.deviceId} className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2">
+                      <div className="min-w-0"><p className="truncate text-sm font-medium text-slate-300">{d.hostname}</p><p className="text-[10px] text-slate-600">Attached {formatTime(d.attachedAt)}</p></div>
+                      <Pill className={d.status === "DOWN" ? "border-red-500/30 bg-red-500/10 text-red-400" : "border-slate-700 bg-slate-800 text-slate-400"}>{d.status || "UNKNOWN"}</Pill>
+                    </div>)}</div>
+                  </section>}
                   <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5"><div className="flex items-center gap-2"><Radio size={16} className="text-blue-400" /><h3 className="font-semibold text-white">Escalation command</h3></div><div className="mt-5 space-y-3">{[1,2,3].map(level=>{const activeLevel=currentStage===level;const completed=currentStage>level||incident?.status==="ACKNOWLEDGED"||incident?.status==="RESOLVED";return <div key={level} className={`flex items-center gap-3 rounded-xl border p-3 ${activeLevel?"border-blue-500/30 bg-blue-500/10":"border-slate-800 bg-slate-950/40"}`}><div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${completed?"bg-emerald-500/15 text-emerald-400":activeLevel?"bg-blue-500/15 text-blue-400":"bg-slate-800 text-slate-600"}`}>{completed?"✓":`L${level}`}</div><div className="min-w-0"><p className="text-xs font-semibold text-slate-300">Level {level}</p><p className="text-[10px] text-slate-600">{activeLevel?"Current escalation stage":completed?"Completed":"Standby"}</p></div>{activeLevel&&<span className="ml-auto h-2 w-2 animate-pulse rounded-full bg-blue-400"/>}</div>})}</div></section>
                   {incident?.acknowledgement && <section className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5"><div className="flex gap-3"><CheckCircle2 className="shrink-0 text-emerald-400" size={18} /><div><p className="text-xs font-semibold text-emerald-300">Technician acknowledgement</p><p className="mt-1 text-sm leading-relaxed text-slate-400">{incident.acknowledgement}</p></div></div></section>}
                 </aside>

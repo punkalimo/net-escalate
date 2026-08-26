@@ -536,33 +536,97 @@ function determineIncidentSeverity(
 }
 
 const ACTIVE_INCIDENT_STATUSES = ["OPEN", "CALLING", "ACKNOWLEDGED", "ESCALATING", "FAILED"];
+const MAX_ANCESTOR_HOPS = 10;
 
-// If this device's parent already has an active incident, its own failure is
-// most likely a symptom rather than an independent fault - attach it to the
-// parent's incident instead of paging a technician for it separately.
+// Find the nearest ancestor (walking parentDeviceId all the way up, not just
+// one hop) that currently has an active incident of its own. A direct parent
+// can be down too without having its own top-level incident - it may itself
+// be suppressed/attached under a grandparent's incident, in which case its
+// activeIncidentId is null and the fault has to be attributed further up.
+async function findNearestActiveAncestorIncident(
+    device
+) {
+    const visited = new Set([
+        device.deviceId
+    ]);
+
+    let parentDeviceId =
+        device.parentDeviceId;
+
+    for (
+        let hops = 0;
+        parentDeviceId && hops < MAX_ANCESTOR_HOPS;
+        hops++
+    ) {
+        if (
+            visited.has(
+                parentDeviceId
+            )
+        ) {
+            break;
+        }
+
+        visited.add(
+            parentDeviceId
+        );
+
+        const parentDevice =
+            await Device.findOne({
+                deviceId:
+                    parentDeviceId
+            });
+
+        if (!parentDevice) {
+            break;
+        }
+
+        if (
+            parentDevice.activeIncidentId
+        ) {
+            const parentIncident =
+                await Incident.findOne({
+                    incidentId:
+                        parentDevice.activeIncidentId,
+                    status: {
+                        $in: ACTIVE_INCIDENT_STATUSES
+                    }
+                });
+
+            if (parentIncident) {
+                return {
+                    parentDevice,
+                    parentIncident
+                };
+            }
+        }
+
+        parentDeviceId =
+            parentDevice.parentDeviceId;
+    }
+
+    return null;
+}
+
+// If an ancestor up the topology chain already has an active incident, this
+// device's own failure is most likely a symptom rather than an independent
+// fault - attach it to that incident instead of paging a technician for it
+// separately.
 async function attachToParentIncident(
     device
 ) {
-    if (!device.parentDeviceId) {
+    const found =
+        await findNearestActiveAncestorIncident(
+            device
+        );
+
+    if (!found) {
         return null;
     }
 
-    const parentDevice = await Device.findOne({
-        deviceId: device.parentDeviceId
-    });
-
-    if (!parentDevice?.activeIncidentId) {
-        return null;
-    }
-
-    const parentIncident = await Incident.findOne({
-        incidentId: parentDevice.activeIncidentId,
-        status: { $in: ACTIVE_INCIDENT_STATUSES }
-    });
-
-    if (!parentIncident) {
-        return null;
-    }
+    const {
+        parentDevice,
+        parentIncident
+    } = found;
 
     const alreadyImpacted = parentIncident.impactedDevices.some(
         (entry) => entry.deviceId === device.deviceId
