@@ -655,6 +655,161 @@ async function attachToParentIncident(
     return parentIncident;
 }
 
+// Breadth-first walk down parentDeviceId (the reverse of the ancestor walk)
+// to find every descendant of a device, bounded and cycle-safe the same way.
+async function collectDescendantDevices(
+    rootDeviceId
+) {
+    const descendants = [];
+    const visited = new Set([
+        rootDeviceId
+    ]);
+
+    let frontier = [
+        rootDeviceId
+    ];
+
+    for (
+        let hops = 0;
+        frontier.length && hops < MAX_ANCESTOR_HOPS;
+        hops++
+    ) {
+        const children =
+            await Device.find({
+                parentDeviceId: {
+                    $in: frontier
+                }
+            });
+
+        frontier = [];
+
+        for (
+            const child of
+            children
+        ) {
+            if (
+                visited.has(
+                    child.deviceId
+                )
+            ) {
+                continue;
+            }
+
+            visited.add(
+                child.deviceId
+            );
+
+            descendants.push(
+                child
+            );
+
+            frontier.push(
+                child.deviceId
+            );
+        }
+    }
+
+    return descendants;
+}
+
+// Independent poll timers mean a descendant can detect its own failure and
+// create a standalone incident before an ancestor further up the same
+// outage has finished doing the same - the ancestor's activeIncidentId
+// simply doesn't exist yet at the moment the descendant checks it. Once a
+// device settles on the incident that represents its own failure (either
+// one it just created, or one it just attached to), sweep its descendants
+// for any such stray incidents and fold them into that same incident so a
+// single cascading outage can't end up fragmented across separately-paged
+// incidents depending on which poll happened to finish first.
+async function adoptDescendantIncidents(
+    device,
+    incident
+) {
+    const descendants =
+        await collectDescendantDevices(
+            device.deviceId
+        );
+
+    let changed = false;
+
+    for (
+        const descendant of
+        descendants
+    ) {
+        if (
+            !descendant.activeIncidentId ||
+            descendant.activeIncidentId === incident.incidentId
+        ) {
+            continue;
+        }
+
+        const strayIncident =
+            await Incident.findOne({
+                incidentId:
+                    descendant.activeIncidentId,
+                status: {
+                    $in: ACTIVE_INCIDENT_STATUSES
+                }
+            });
+
+        if (!strayIncident) {
+            continue;
+        }
+
+        const alreadyImpacted = incident.impactedDevices.some(
+            (entry) => entry.deviceId === descendant.deviceId
+        );
+
+        if (!alreadyImpacted) {
+            incident.impactedDevices.push({
+                deviceId:
+                    descendant.deviceId,
+                hostname:
+                    descendant.hostname,
+                status:
+                    descendant.status,
+                attachedAt:
+                    new Date()
+            });
+
+            changed = true;
+        }
+
+        strayIncident.status =
+            "RESOLVED";
+
+        strayIncident.resolvedAt =
+            new Date();
+
+        strayIncident.description += ` Merged into ${incident.incidentId}: part of the same upstream outage.`;
+
+        await strayIncident.save();
+
+        console.log(
+            `Folded stray incident ${strayIncident.incidentId} (${descendant.hostname}) into ${incident.incidentId} (${device.hostname}) - same cascading outage, detected out of order.`
+        );
+
+        emitMonitoringEvent(
+            "incident_updated",
+            strayIncident
+        );
+
+        descendant.activeIncidentId =
+            null;
+
+        await descendant.save();
+    }
+
+    if (changed) {
+        await incident.save();
+
+        emitMonitoringEvent(
+            "incident_updated",
+            incident
+        );
+    }
+}
+
 // Once a device recovers, drop it from any parent incident's impacted list
 // so the impacted count only reflects devices that are currently affected.
 // Looked up by membership rather than via parentDevice.activeIncidentId: if
@@ -711,6 +866,11 @@ async function createDeviceIncident(
         );
 
     if (suppressedByParent) {
+        await adoptDescendantIncidents(
+            device,
+            suppressedByParent
+        );
+
         return null;
     }
 
@@ -870,6 +1030,11 @@ async function createDeviceIncident(
             }
         );
     }
+
+    await adoptDescendantIncidents(
+        device,
+        incident
+    );
 
     return incident;
 }
