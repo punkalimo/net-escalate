@@ -38,6 +38,85 @@ function IncidentSearchPolish() {
     /* Full-width command workspace */
     main.mx-auto.max-w-[1700px] { max-width: none !important; width: 100% !important; }
 
+    /* Operations / NOC command center */
+    main > div.space-y-6:first-child { width: 100%; max-width: none; }
+    main > div.space-y-6:first-child > div:first-child {
+      min-height: 180px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 32px clamp(24px, 4vw, 52px) !important;
+      border-radius: 18px !important;
+      background:
+        radial-gradient(circle at 82% 20%, rgb(37 99 235 / .16), transparent 30%),
+        linear-gradient(115deg, rgb(15 23 42 / .95), rgb(2 6 23 / .94)) !important;
+      box-shadow: inset 0 1px 0 rgb(255 255 255 / .025), 0 22px 65px rgb(0 0 0 / .18);
+    }
+    main > div.space-y-6:first-child > div:first-child h1 { font-size: clamp(24px, 3vw, 36px) !important; letter-spacing: -.025em; }
+    main > div.space-y-6:first-child > div:first-child p { max-width: 720px; font-size: 13px; }
+
+    /* KPI strip */
+    main > div.space-y-6:first-child > div:nth-child(2) {
+      grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    }
+    main > div.space-y-6:first-child > div:nth-child(2) > div {
+      min-height: 126px;
+      border-radius: 14px !important;
+      background: rgb(8 13 22 / .84) !important;
+      box-shadow: inset 0 1px 0 rgb(255 255 255 / .02);
+    }
+
+    /* Main command panels */
+    main > div.space-y-6:first-child > div:nth-child(3) {
+      grid-template-columns: minmax(0, 1.65fr) minmax(320px, .85fr) !important;
+      align-items: stretch;
+    }
+    main > div.space-y-6:first-child > div:nth-child(3) > section {
+      min-height: 430px;
+      border-radius: 16px !important;
+      background: rgb(8 13 22 / .82) !important;
+      box-shadow: 0 18px 50px rgb(0 0 0 / .12);
+    }
+    main > div.space-y-6:first-child > div:nth-child(3) > section:first-child > div:first-child {
+      padding: 18px 20px !important;
+      background: linear-gradient(180deg, rgb(15 23 42 / .5), transparent);
+    }
+    main > div.space-y-6:first-child > div:nth-child(3) > section:first-child button {
+      transition: background .16s ease;
+    }
+    main > div.space-y-6:first-child > div:nth-child(3) > section:first-child button:hover {
+      background: rgb(30 41 59 / .38);
+    }
+
+    /* Fleet panel becomes a visual operations status board */
+    main > div.space-y-6:first-child > div:nth-child(3) > section:last-child {
+      position: relative;
+      overflow: hidden;
+    }
+    main > div.space-y-6:first-child > div:nth-child(3) > section:last-child::after {
+      content: "LIVE";
+      position: absolute;
+      right: 18px;
+      top: 18px;
+      border: 1px solid rgb(16 185 129 / .18);
+      background: rgb(16 185 129 / .06);
+      color: rgb(52 211 153 / .7);
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 8px;
+      font-weight: 800;
+      letter-spacing: .16em;
+    }
+
+    @media (max-width: 1100px) {
+      main > div.space-y-6:first-child > div:nth-child(2) { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+      main > div.space-y-6:first-child > div:nth-child(3) { grid-template-columns: 1fr !important; }
+    }
+    @media (max-width: 640px) {
+      main > div.space-y-6:first-child > div:first-child { min-height: 150px; padding: 24px !important; }
+      main > div.space-y-6:first-child > div:nth-child(2) { grid-template-columns: 1fr !important; }
+    }
+
     /* Incident command surface */
     section:has(input[placeholder^="Search ID, device"]) {
       border-color: rgb(30 41 59 / .9) !important;
@@ -105,7 +184,6 @@ function IncidentSearchPolish() {
       background-color: rgb(15 23 42 / .95) !important;
     }
 
-    /* Keep action buttons grouped as a clean command area */
     section:has(input[placeholder^="Search ID, device"]) > div:first-child > div:last-child {
       display: flex !important;
       justify-content: flex-end;
@@ -122,24 +200,17 @@ function IncidentSearchPolish() {
       transition: .18s ease;
     }
 
-    /* Incident table/card area uses the whole workspace */
-    section:has(input[placeholder^="Search ID, device"]) > div:nth-child(2) {
-      min-height: 420px;
-    }
+    section:has(input[placeholder^="Search ID, device"]) > div:nth-child(2) { min-height: 420px; }
 
     @media (max-width: 1280px) {
       section:has(input[placeholder^="Search ID, device"]) > div:first-child { grid-template-columns: 1fr; }
-      section:has(input[placeholder^="Search ID, device"]) > div:first-child > div:first-child {
-        grid-template-columns: minmax(240px, 1fr) repeat(4, minmax(115px, 1fr));
-      }
+      section:has(input[placeholder^="Search ID, device"]) > div:first-child > div:first-child { grid-template-columns: minmax(240px, 1fr) repeat(4, minmax(115px, 1fr)); }
     }
-
     @media (max-width: 900px) {
       section:has(input[placeholder^="Search ID, device"]) > div:first-child > div:first-child { grid-template-columns: 1fr 1fr; }
       section:has(input[placeholder^="Search ID, device"]) input[placeholder^="Search ID, device"] { grid-column: 1 / -1; min-width: 0; }
       section:has(input[placeholder^="Search ID, device"]) > div:first-child > div:last-child { justify-content: flex-start; }
     }
-
     @media (max-width: 640px) {
       section:has(input[placeholder^="Search ID, device"]) > div:first-child > div:first-child { grid-template-columns: 1fr; }
       section:has(input[placeholder^="Search ID, device"]) input[placeholder^="Search ID, device"] { grid-column: auto; }
