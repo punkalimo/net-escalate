@@ -96,7 +96,12 @@ export async function pollDeviceInterfaces(deviceId) {
       const metrics = await getInterfaceMetrics(device, Number(item.ifIndex));
       const previousMetrics = item.metrics || null;
       const previousCheckedAt = previousMetrics?.checkedAt ? new Date(previousMetrics.checkedAt) : null;
-      const elapsedSeconds = previousCheckedAt ? (now.getTime() - previousCheckedAt.getTime()) / 1000 : null;
+      // A counter-source flip (HC <-> legacy, e.g. a one-off SNMP hiccup on
+      // the HC OIDs) isn't a real traffic delta - drop the baseline for this
+      // cycle only so it can't produce a bogus rate spike; it re-establishes
+      // on the next poll.
+      const octetSourceChanged = Boolean(previousMetrics?.octetSource) && previousMetrics.octetSource !== metrics.octetSource;
+      const elapsedSeconds = previousCheckedAt && !octetSourceChanged ? (now.getTime() - previousCheckedAt.getTime()) / 1000 : null;
       const inOctets = toNumber(metrics.inOctets) ?? 0;
       const outOctets = toNumber(metrics.outOctets) ?? 0;
       const inBps = calculateRate(inOctets, toNumber(previousMetrics?.inOctets), elapsedSeconds);
@@ -111,6 +116,7 @@ export async function pollDeviceInterfaces(deviceId) {
         duplex: metrics.duplex,
         inOctets,
         outOctets,
+        octetSource: metrics.octetSource,
         inErrors: toNumber(metrics.inErrors) ?? 0,
         outErrors: toNumber(metrics.outErrors) ?? 0,
         inDiscards: toNumber(metrics.inDiscards) ?? 0,
@@ -122,7 +128,7 @@ export async function pollDeviceInterfaces(deviceId) {
         checkedAt: now
       };
 
-      const healthResult = evaluateInterfaceHealth(baseMetrics, status);
+      const healthResult = evaluateInterfaceHealth(baseMetrics, status, device.alertThresholds);
       const previousIncidentId = previousMetrics?.activeIncidentId || null;
       const previousLatched = previousMetrics?.incidentLatched === true;
       const tempInterface = {

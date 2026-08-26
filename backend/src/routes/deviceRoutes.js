@@ -241,6 +241,8 @@ router.post(
                 monitoringMethods,
                 snmp,
                 http,
+                alertThresholds,
+                parentDeviceId,
                 monitoredPorts
             } = req.body;
 
@@ -373,6 +375,14 @@ router.post(
                         port: 80,
                         path: "/"
                     },
+
+                alertThresholds:
+                    alertThresholds || {},
+
+                parentDeviceId:
+                    parentDeviceId
+                        ? String(parentDeviceId).trim()
+                        : null,
 
                 monitoredPorts:
                     Array.isArray(
@@ -752,7 +762,9 @@ router.patch(
                 "monitoringMethods",
                 "snmp",
                 "http",
-                "monitoredPorts"
+                "alertThresholds",
+                "monitoredPorts",
+                "parentDeviceId"
             ];
 
             for (

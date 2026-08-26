@@ -17,7 +17,18 @@ function finite(value) {
   return Number.isFinite(Number(value)) ? Number(value) : 0;
 }
 
-export function evaluateInterfaceHealth(metrics, status) {
+// Devices may override the utilization tiers (device.alertThresholds); any
+// missing/invalid tier falls back to the global default below.
+function resolveUtilizationThresholds(overrides) {
+  const pick = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+  return {
+    utilizationWarning: pick(overrides?.utilizationWarning, HEALTH_THRESHOLDS.utilizationWarning),
+    utilizationDegraded: pick(overrides?.utilizationDegraded, HEALTH_THRESHOLDS.utilizationDegraded),
+    utilizationCritical: pick(overrides?.utilizationCritical, HEALTH_THRESHOLDS.utilizationCritical)
+  };
+}
+
+export function evaluateInterfaceHealth(metrics, status, utilizationThresholdOverrides) {
   if (status === "DOWN") {
     return { health: "DOWN", score: 0, reasons: ["Interface is operationally DOWN."], severity: "critical" };
   }
@@ -26,6 +37,7 @@ export function evaluateInterfaceHealth(metrics, status) {
     return { health: "UNKNOWN", score: null, reasons: ["Interface metrics are unavailable."], severity: "low" };
   }
 
+  const thresholds = resolveUtilizationThresholds(utilizationThresholdOverrides);
   const utilization = metrics.utilizationPercent == null ? 0 : finite(metrics.utilizationPercent);
   const errors = finite(metrics.inErrors) + finite(metrics.outErrors);
   const discards = finite(metrics.inDiscards) + finite(metrics.outDiscards);
@@ -33,18 +45,18 @@ export function evaluateInterfaceHealth(metrics, status) {
   let health = "HEALTHY";
   let severity = "low";
 
-  if (utilization >= HEALTH_THRESHOLDS.utilizationCritical) {
+  if (utilization >= thresholds.utilizationCritical) {
     health = "CRITICAL";
     severity = "critical";
-    reasons.push(`Utilization is ${utilization.toFixed(1)}%, above ${HEALTH_THRESHOLDS.utilizationCritical}%.`);
-  } else if (utilization >= HEALTH_THRESHOLDS.utilizationDegraded) {
+    reasons.push(`Utilization is ${utilization.toFixed(1)}%, above ${thresholds.utilizationCritical}%.`);
+  } else if (utilization >= thresholds.utilizationDegraded) {
     health = "DEGRADED";
     severity = "high";
-    reasons.push(`Utilization is ${utilization.toFixed(1)}%, above ${HEALTH_THRESHOLDS.utilizationDegraded}%.`);
-  } else if (utilization >= HEALTH_THRESHOLDS.utilizationWarning) {
+    reasons.push(`Utilization is ${utilization.toFixed(1)}%, above ${thresholds.utilizationDegraded}%.`);
+  } else if (utilization >= thresholds.utilizationWarning) {
     health = "WARNING";
     severity = "medium";
-    reasons.push(`Utilization is ${utilization.toFixed(1)}%, above ${HEALTH_THRESHOLDS.utilizationWarning}%.`);
+    reasons.push(`Utilization is ${utilization.toFixed(1)}%, above ${thresholds.utilizationWarning}%.`);
   }
 
   if (errors >= HEALTH_THRESHOLDS.errorsCritical) {

@@ -121,8 +121,28 @@ export async function testSnmpConnection(device) {
 }
 
 const IF_OIDS = {
-  speed: "1.3.6.1.2.1.2.2.1.5", adminStatus: "1.3.6.1.2.1.2.2.1.7", operStatus: "1.3.6.1.2.1.2.2.1.8", inOctets: "1.3.6.1.2.1.2.2.1.10", inDiscards: "1.3.6.1.2.1.2.2.1.13", inErrors: "1.3.6.1.2.1.2.2.1.14", outOctets: "1.3.6.1.2.1.2.2.1.16", outDiscards: "1.3.6.1.2.1.2.2.1.19", outErrors: "1.3.6.1.2.1.2.2.1.20", highSpeed: "1.3.6.1.2.1.31.1.1.1.15", ifName: "1.3.6.1.2.1.31.1.1.1.1", ifAlias: "1.3.6.1.2.1.31.1.1.1.18", duplex: "1.3.6.1.2.1.10.7.2.1.19"
+  speed: "1.3.6.1.2.1.2.2.1.5", adminStatus: "1.3.6.1.2.1.2.2.1.7", operStatus: "1.3.6.1.2.1.2.2.1.8", inOctets: "1.3.6.1.2.1.2.2.1.10", inDiscards: "1.3.6.1.2.1.2.2.1.13", inErrors: "1.3.6.1.2.1.2.2.1.14", outOctets: "1.3.6.1.2.1.2.2.1.16", outDiscards: "1.3.6.1.2.1.2.2.1.19", outErrors: "1.3.6.1.2.1.2.2.1.20", highSpeed: "1.3.6.1.2.1.31.1.1.1.15", ifName: "1.3.6.1.2.1.31.1.1.1.1", ifAlias: "1.3.6.1.2.1.31.1.1.1.18", duplex: "1.3.6.1.2.1.10.7.2.1.19", hcInOctets: "1.3.6.1.2.1.31.1.1.1.6", hcOutOctets: "1.3.6.1.2.1.31.1.1.1.10"
 };
+
+// SNMPv1 has no per-varbind exception values: a single unsupported OID (the
+// HC/64-bit counters don't exist pre-v2c) fails the whole GET, not just that
+// varbind. Never request them over v1.
+const V1_UNSUPPORTED_OIDS = new Set(["hcInOctets", "hcOutOctets"]);
+
+// net-snmp returns Counter64 varbinds as a raw big-endian byte Buffer, not a
+// JS number - Number(buffer) silently produces NaN. Decode it by hand; the
+// result is only converted back to a plain Number (safe up to 2^53, i.e.
+// ~9 petabytes of octets - far beyond any realistic counter lifetime here)
+// so it stays a normal Mongoose Number field like everything else.
+export function decodeCounter64(value) {
+  if (!Buffer.isBuffer(value)) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  let big = 0n;
+  for (const byte of value) big = (big << 8n) | BigInt(byte);
+  return Number(big);
+}
 
 export function decodeDuplex(value) {
   const n = Number(value);
@@ -241,7 +261,10 @@ export async function getInterfaceStatus(device, ifIndex) {
 
 export async function getInterfaceMetrics(device, ifIndex) {
   const session = createSnmpSession(device);
-  const oids = Object.fromEntries(Object.entries(IF_OIDS).filter(([key]) => !["ifName", "ifAlias"].includes(key)).map(([key, oid]) => [key, `${oid}.${ifIndex}`]));
+  const version = normaliseSnmpVersion(device.snmp?.version);
+  const skipKeys = new Set(["ifName", "ifAlias"]);
+  if (version === "1") for (const key of V1_UNSUPPORTED_OIDS) skipKeys.add(key);
+  const oids = Object.fromEntries(Object.entries(IF_OIDS).filter(([key]) => !skipKeys.has(key)).map(([key, oid]) => [key, `${oid}.${ifIndex}`]));
   return new Promise((resolve, reject) => {
     session.get(Object.values(oids), (error, varbinds) => {
       safeClose(session);
@@ -250,12 +273,16 @@ export async function getInterfaceMetrics(device, ifIndex) {
       for (const varbind of varbinds || []) {
         if (snmp.isVarbindError(varbind)) continue;
         const key = Object.keys(oids).find(name => oids[name] === varbind.oid);
-        if (key) values[key] = Number(varbind.value);
+        if (!key) continue;
+        values[key] = key === "hcInOctets" || key === "hcOutOctets" ? decodeCounter64(varbind.value) : Number(varbind.value);
       }
       const speedMbps = speedFromValues(values.highSpeed, values.speed);
-      resolve({ ifIndex, speedMbps, speedSource: Number(values.highSpeed) > 0 ? "ifHighSpeed" : "ifSpeed", duplex: decodeDuplex(values.duplex), adminStatus: values.adminStatus ?? null, operStatus: values.operStatus ?? null, inOctets: values.inOctets ?? 0, outOctets: values.outOctets ?? 0, inErrors: values.inErrors ?? 0, outErrors: values.outErrors ?? 0, inDiscards: values.inDiscards ?? 0, outDiscards: values.outDiscards ?? 0, checkedAt: new Date() });
+      const hcAvailable = Number.isFinite(values.hcInOctets) && Number.isFinite(values.hcOutOctets);
+      const inOctets = hcAvailable ? values.hcInOctets : (values.inOctets ?? 0);
+      const outOctets = hcAvailable ? values.hcOutOctets : (values.outOctets ?? 0);
+      resolve({ ifIndex, speedMbps, speedSource: Number(values.highSpeed) > 0 ? "ifHighSpeed" : "ifSpeed", duplex: decodeDuplex(values.duplex), adminStatus: values.adminStatus ?? null, operStatus: values.operStatus ?? null, inOctets, outOctets, octetSource: hcAvailable ? "HC" : "legacy", inErrors: values.inErrors ?? 0, outErrors: values.outErrors ?? 0, inDiscards: values.inDiscards ?? 0, outDiscards: values.outDiscards ?? 0, checkedAt: new Date() });
     });
   });
 }
 
-export default { testSnmpConnection, discoverInterfaces, getInterfaceStatus, getInterfaceMetrics, decodeSnmpText, decodeSnmpBinary, decodeDuplex, speedFromValues, normaliseSnmpVersion };
+export default { testSnmpConnection, discoverInterfaces, getInterfaceStatus, getInterfaceMetrics, decodeSnmpText, decodeSnmpBinary, decodeDuplex, decodeCounter64, speedFromValues, normaliseSnmpVersion };

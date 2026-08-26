@@ -19,6 +19,16 @@ const escalationHistorySchema = new mongoose.Schema(
   { _id: false }
 );
 
+const impactedDeviceSchema = new mongoose.Schema(
+  {
+    deviceId: { type: String, required: true },
+    hostname: { type: String, required: true },
+    status: { type: String, default: null },
+    attachedAt: { type: Date, default: Date.now }
+  },
+  { _id: false }
+);
+
 const incidentSchema = new mongoose.Schema(
   {
     incidentId: { type: String, unique: true, required: true },
@@ -49,7 +59,8 @@ const incidentSchema = new mongoose.Schema(
     parentIncidentId: { type: String, default: null, index: true },
     correlationConfidence: { type: Number, default: null, min: 0, max: 100 },
     correlationEvidence: { type: [String], default: [] },
-    escalationHistory: { type: [escalationHistorySchema], default: [] }
+    escalationHistory: { type: [escalationHistorySchema], default: [] },
+    impactedDevices: { type: [impactedDeviceSchema], default: [] }
   },
   { timestamps: true }
 );

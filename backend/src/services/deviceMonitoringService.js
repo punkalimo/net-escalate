@@ -535,6 +535,98 @@ function determineIncidentSeverity(
     return "medium";
 }
 
+const ACTIVE_INCIDENT_STATUSES = ["OPEN", "CALLING", "ACKNOWLEDGED", "ESCALATING", "FAILED"];
+
+// If this device's parent already has an active incident, its own failure is
+// most likely a symptom rather than an independent fault - attach it to the
+// parent's incident instead of paging a technician for it separately.
+async function attachToParentIncident(
+    device
+) {
+    if (!device.parentDeviceId) {
+        return null;
+    }
+
+    const parentDevice = await Device.findOne({
+        deviceId: device.parentDeviceId
+    });
+
+    if (!parentDevice?.activeIncidentId) {
+        return null;
+    }
+
+    const parentIncident = await Incident.findOne({
+        incidentId: parentDevice.activeIncidentId,
+        status: { $in: ACTIVE_INCIDENT_STATUSES }
+    });
+
+    if (!parentIncident) {
+        return null;
+    }
+
+    const alreadyImpacted = parentIncident.impactedDevices.some(
+        (entry) => entry.deviceId === device.deviceId
+    );
+
+    if (!alreadyImpacted) {
+        parentIncident.impactedDevices.push({
+            deviceId: device.deviceId,
+            hostname: device.hostname,
+            status: device.status,
+            attachedAt: new Date()
+        });
+
+        await parentIncident.save();
+
+        console.log(
+            `Device ${device.hostname} attached as impacted under parent incident ${parentIncident.incidentId} (parent ${parentDevice.hostname} is already down).`
+        );
+
+        emitMonitoringEvent(
+            "incident_updated",
+            parentIncident
+        );
+    }
+
+    return parentIncident;
+}
+
+// Once a device recovers, drop it from any parent incident's impacted list
+// so the impacted count only reflects devices that are currently affected.
+// Looked up by membership rather than via parentDevice.activeIncidentId: if
+// the parent itself recovered first (a real race - a child's own recovery
+// poll can land after the parent's), that field is already cleared by the
+// time this runs, and the child would otherwise have no way back to the
+// incident it needs to detach from. Scoped to still-active incidents only,
+// so a resolved incident's impacted list is left as-is - a historical
+// record of who was affected, not a live status.
+async function detachFromParentIncident(
+    device
+) {
+    const parentIncident = await Incident.findOne({
+        "impactedDevices.deviceId": device.deviceId,
+        status: { $in: ACTIVE_INCIDENT_STATUSES }
+    });
+
+    if (!parentIncident) {
+        return;
+    }
+
+    const before = parentIncident.impactedDevices.length;
+
+    parentIncident.impactedDevices = parentIncident.impactedDevices.filter(
+        (entry) => entry.deviceId !== device.deviceId
+    );
+
+    if (parentIncident.impactedDevices.length !== before) {
+        await parentIncident.save();
+        emitMonitoringEvent(
+            "incident_updated",
+            parentIncident
+        );
+    }
+}
+
 async function createDeviceIncident(
     device,
     result
@@ -546,6 +638,15 @@ async function createDeviceIncident(
             `Device ${device.hostname} already has active incident ${device.activeIncidentId}`
         );
 
+        return null;
+    }
+
+    const suppressedByParent =
+        await attachToParentIncident(
+            device
+        );
+
+    if (suppressedByParent) {
         return null;
     }
 
@@ -712,6 +813,10 @@ async function createDeviceIncident(
 async function resolveDeviceIncident(
     device
 ) {
+    await detachFromParentIncident(
+        device
+    );
+
     if (
         !device.activeIncidentId
     ) {
