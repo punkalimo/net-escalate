@@ -18,8 +18,6 @@ const NAV_ITEMS = [
 ];
 
 function clickExisting(label) {
-  // The lightweight navigation is rendered above NocDashboard. Do not click
-  // the bridge button itself; target the original dashboard navigation button.
   const button = Array.from(document.querySelectorAll("aside button"))
     .find(candidate => candidate.textContent?.trim().startsWith(label));
   button?.click();
@@ -30,89 +28,122 @@ function openDestination(id) {
     clickExisting(NAV_ITEMS.find(([key]) => key === id)?.[1]);
     return;
   }
-
-  if (id === "rca") {
-    document.querySelector('button[title="Open Root Cause Analysis"]')?.click();
-    return;
-  }
-
-  if (id === "phase4") {
-    document.querySelector('button[aria-label="Phase 4 Command Center"]')?.click();
-    return;
-  }
-
-  if (id === "topology") {
-    document.querySelector('button.fixed.bottom-6.right-6')?.click();
-  }
+  if (id === "rca") document.querySelector('button[title="Open Root Cause Analysis"]')?.click();
+  if (id === "phase4") document.querySelector('button[aria-label="Phase 4 Command Center"]')?.click();
+  if (id === "topology") document.querySelector('button.fixed.bottom-6.right-6')?.click();
 }
 
 function IncidentSearchPolish() {
   return <style>{`
-    /* Incident command search/filter refinement. Kept here so the existing
-       incident data/filter logic remains untouched while the controls get a
-       more deliberate NOC-console presentation. */
-    input[placeholder^="Search ID, device"] {
-      min-height: 44px;
-      border-radius: 12px !important;
-      border-color: rgb(30 41 59 / .95) !important;
-      background: rgb(2 6 23 / .72) !important;
-      box-shadow: inset 0 1px 0 rgb(255 255 255 / .02);
-      font-size: 13px;
-      transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
-    }
-    input[placeholder^="Search ID, device"]:focus {
-      border-color: rgb(59 130 246 / .55) !important;
-      background: rgb(2 6 23 / .95) !important;
-      box-shadow: 0 0 0 3px rgb(59 130 246 / .08), inset 0 1px 0 rgb(255 255 255 / .03);
-    }
-    input[placeholder^="Search ID, device"]::placeholder { color: rgb(71 85 105); }
+    /* Full-width command workspace */
+    main.mx-auto.max-w-[1700px] { max-width: none !important; width: 100% !important; }
 
-    input[placeholder^="Search ID, device"] + * { pointer-events: none; }
+    /* Incident command surface */
+    section:has(input[placeholder^="Search ID, device"]) {
+      border-color: rgb(30 41 59 / .9) !important;
+      background: linear-gradient(180deg, rgb(15 23 42 / .68), rgb(2 6 23 / .72)) !important;
+      box-shadow: 0 18px 55px rgb(0 0 0 / .18);
+    }
 
     section:has(input[placeholder^="Search ID, device"]) > div:first-child {
-      padding: 18px !important;
-      background: linear-gradient(180deg, rgb(15 23 42 / .42), rgb(15 23 42 / .18));
+      display: grid !important;
+      grid-template-columns: minmax(260px, 1fr) auto;
+      gap: 14px !important;
+      padding: 20px !important;
+      background: linear-gradient(180deg, rgb(15 23 42 / .58), rgb(15 23 42 / .18));
+      border-bottom-color: rgb(30 41 59 / .85) !important;
     }
+
     section:has(input[placeholder^="Search ID, device"]) > div:first-child > div:first-child {
-      align-items: stretch;
-      gap: 12px;
+      display: grid !important;
+      grid-template-columns: minmax(280px, 1fr) repeat(4, minmax(125px, auto));
+      gap: 10px !important;
+      align-items: center;
     }
-    section:has(input[placeholder^="Search ID, device"]) select {
-      min-height: 42px;
-      min-width: 145px;
-      border-radius: 10px !important;
-      border-color: rgb(30 41 59 / .95) !important;
-      background-color: rgb(2 6 23 / .78) !important;
-      color: rgb(203 213 225) !important;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: border-color .15s ease, background-color .15s ease;
+
+    section:has(input[placeholder^="Search ID, device"]) input[placeholder^="Search ID, device"] {
+      min-height: 44px;
+      width: 100%;
+      min-width: 280px;
+      padding-left: 42px !important;
+      border-radius: 12px !important;
+      border: 1px solid rgb(51 65 85 / .9) !important;
+      background: rgb(2 6 23 / .86) !important;
+      color: rgb(226 232 240) !important;
+      box-shadow: inset 0 1px 0 rgb(255 255 255 / .025);
+      font-size: 13px;
+      transition: .18s ease;
     }
-    section:has(input[placeholder^="Search ID, device"]) select:hover {
-      border-color: rgb(51 65 85) !important;
-      background-color: rgb(15 23 42 / .95) !important;
-    }
-    section:has(input[placeholder^="Search ID, device"]) select:focus {
-      border-color: rgb(59 130 246 / .55) !important;
-      box-shadow: 0 0 0 3px rgb(59 130 246 / .08);
+
+    section:has(input[placeholder^="Search ID, device"]) input[placeholder^="Search ID, device"]:focus {
+      border-color: rgb(59 130 246 / .65) !important;
+      box-shadow: 0 0 0 3px rgb(59 130 246 / .1), inset 0 1px 0 rgb(255 255 255 / .03);
       outline: none;
     }
+
+    section:has(input[placeholder^="Search ID, device"]) input[placeholder^="Search ID, device"]::placeholder { color: rgb(100 116 139); }
+
+    section:has(input[placeholder^="Search ID, device"]) select {
+      min-height: 42px;
+      min-width: 125px;
+      width: 100%;
+      border-radius: 10px !important;
+      border: 1px solid rgb(51 65 85 / .9) !important;
+      background-color: rgb(2 6 23 / .86) !important;
+      color: rgb(203 213 225) !important;
+      padding: 0 32px 0 12px !important;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      outline: none;
+      transition: .18s ease;
+    }
+
+    section:has(input[placeholder^="Search ID, device"]) select:hover,
+    section:has(input[placeholder^="Search ID, device"]) select:focus {
+      border-color: rgb(59 130 246 / .5) !important;
+      background-color: rgb(15 23 42 / .95) !important;
+    }
+
+    /* Keep action buttons grouped as a clean command area */
     section:has(input[placeholder^="Search ID, device"]) > div:first-child > div:last-child {
-      display: flex;
-      flex-wrap: wrap;
+      display: flex !important;
+      justify-content: flex-end;
+      align-items: center;
       gap: 8px;
-      padding-top: 0 !important;
-      border-top: 1px solid rgb(30 41 59 / .7);
-      margin-top: 2px;
-      padding-top: 14px !important;
+      padding: 0 !important;
+      margin: 0 !important;
+      border: 0 !important;
     }
-    @media (min-width: 1024px) {
-      section:has(input[placeholder^="Search ID, device"]) > div:first-child > div:first-child { align-items: center; }
-      section:has(input[placeholder^="Search ID, device"]) input[placeholder^="Search ID, device"] { min-width: 280px; }
+
+    section:has(input[placeholder^="Search ID, device"]) > div:first-child button {
+      min-height: 42px;
+      border-radius: 10px;
+      transition: .18s ease;
     }
+
+    /* Incident table/card area uses the whole workspace */
+    section:has(input[placeholder^="Search ID, device"]) > div:nth-child(2) {
+      min-height: 420px;
+    }
+
+    @media (max-width: 1280px) {
+      section:has(input[placeholder^="Search ID, device"]) > div:first-child { grid-template-columns: 1fr; }
+      section:has(input[placeholder^="Search ID, device"]) > div:first-child > div:first-child {
+        grid-template-columns: minmax(240px, 1fr) repeat(4, minmax(115px, 1fr));
+      }
+    }
+
+    @media (max-width: 900px) {
+      section:has(input[placeholder^="Search ID, device"]) > div:first-child > div:first-child { grid-template-columns: 1fr 1fr; }
+      section:has(input[placeholder^="Search ID, device"]) input[placeholder^="Search ID, device"] { grid-column: 1 / -1; min-width: 0; }
+      section:has(input[placeholder^="Search ID, device"]) > div:first-child > div:last-child { justify-content: flex-start; }
+    }
+
     @media (max-width: 640px) {
-      section:has(input[placeholder^="Search ID, device"]) select { flex: 1 1 145px; min-width: 0; }
+      section:has(input[placeholder^="Search ID, device"]) > div:first-child > div:first-child { grid-template-columns: 1fr; }
+      section:has(input[placeholder^="Search ID, device"]) input[placeholder^="Search ID, device"] { grid-column: auto; }
+      section:has(input[placeholder^="Search ID, device"]) select { min-width: 0; }
     }
   `}</style>;
 }
@@ -129,7 +160,6 @@ function NavigationBridge() {
       const nextCount = count && /^\d+$/.test(count) ? Number(count) : 0;
       setIncidentCount(current => current === nextCount ? current : nextCount);
     };
-
     sync();
     const interval = window.setInterval(sync, 1000);
     return () => window.clearInterval(interval);
