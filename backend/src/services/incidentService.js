@@ -1,5 +1,6 @@
 import Technician from "../models/Technician.js";
 import { escalateToTechnician } from "./escalationService.js";
+import { pushTimelineEvent } from "./timelineService.js";
 
 const MAX_LEVEL = 3;
 
@@ -46,6 +47,7 @@ export async function processIncident(incident, io) {
         if (level <= MAX_LEVEL) {
           incident.escalationLevel = level;
           incident.status = "ESCALATING";
+          pushTimelineEvent(incident, "ESCALATION_TRIGGERED", `No active technician at level ${level - 1}; escalating to level ${level}.`, { actor: "escalation engine" });
           await incident.save();
           emitIncidentUpdate(io, incident);
           continue;
@@ -68,6 +70,7 @@ export async function processIncident(incident, io) {
       incident.callProviderCode = null;
       incident.callProviderMessage = null;
       incident.callProviderRetryable = false;
+      pushTimelineEvent(incident, "NOTIFICATION_SENT", `Level ${level} notification sent to ${technician.name}.`, { actor: "escalation engine" });
       await incident.save();
       emitIncidentUpdate(io, incident);
 
@@ -105,6 +108,7 @@ export async function processIncident(incident, io) {
         if (level <= MAX_LEVEL) {
           incident.escalationLevel = level;
           incident.status = "ESCALATING";
+          pushTimelineEvent(incident, "ESCALATION_TRIGGERED", `Call provider failed at level ${level - 1}; escalating to level ${level}.`, { actor: "escalation engine" });
           await incident.save();
           emitIncidentUpdate(io, incident);
           continue;
@@ -128,6 +132,7 @@ export async function processIncident(incident, io) {
         history.status = "ACKNOWLEDGED";
         history.response = incident.acknowledgement;
         history.completedAt = new Date();
+        pushTimelineEvent(incident, "INCIDENT_ACKNOWLEDGED", `${technician.name} acknowledged the incident.`, { actor: technician.name });
         await incident.save();
         emitIncidentUpdate(io, incident);
         console.log(`Incident ${incident.incidentId} acknowledged by ${technician.name}.`);
@@ -144,6 +149,7 @@ export async function processIncident(incident, io) {
         if (level <= MAX_LEVEL) {
           incident.escalationLevel = level;
           incident.status = "ESCALATING";
+          pushTimelineEvent(incident, "ESCALATION_TRIGGERED", `${technician.name} was unavailable at level ${level - 1}; escalating to level ${level}.`, { actor: "escalation engine" });
           await incident.save();
           emitIncidentUpdate(io, incident);
           continue;
@@ -158,6 +164,7 @@ export async function processIncident(incident, io) {
         if (level <= MAX_LEVEL) {
           incident.escalationLevel = level;
           incident.status = "ESCALATING";
+          pushTimelineEvent(incident, "ESCALATION_TRIGGERED", `No clear acknowledgement from ${technician.name} at level ${level - 1}; escalating to level ${level}.`, { actor: "escalation engine" });
           await incident.save();
           emitIncidentUpdate(io, incident);
           continue;

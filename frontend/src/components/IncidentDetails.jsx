@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
 import { Activity, AlertTriangle, CheckCircle2, Clock3, GitMerge, Network, Phone, Radio, RefreshCw, Server, ShieldAlert, Unlink, UserRound, X, Zap } from "lucide-react";
-import { getIncident, getIncidentBlastRadius, getIncidentRootCause, getIncidents, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
+import { addIncidentComment, getIncident, getIncidentBlastRadius, getIncidentRootCause, getIncidents, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
@@ -81,6 +81,24 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
   }, [initialIncident?.incidentId]);
 
   const history = useMemo(() => [...(incident?.escalationHistory || [])].sort((a, b) => new Date(a.startedAt || 0) - new Date(b.startedAt || 0)), [incident]);
+  const timeline = useMemo(() => [...(incident?.timeline || [])].sort((a, b) => new Date(a.at || 0) - new Date(b.at || 0)), [incident]);
+
+  const [commentDraft, setCommentDraft] = useState("");
+  const [commentBusy, setCommentBusy] = useState(false);
+
+  async function submitComment() {
+    const message = commentDraft.trim();
+    if (!message || !incident?.incidentId) return;
+    setCommentBusy(true);
+    try {
+      const result = await addIncidentComment(incident.incidentId, message);
+      if (result.success) { setIncident(result.incident); setCommentDraft(""); }
+    } catch (e) {
+      setError(e.response?.data?.message || e.message || "Unable to post comment.");
+    } finally {
+      setCommentBusy(false);
+    }
+  }
   const currentStage = incident?.escalationLevel || 1;
   const live = ["CALLING", "ESCALATING"].includes(incident?.status);
 
@@ -257,10 +275,18 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
               </section>
 
               <div className="grid gap-6 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,.7fr)]">
+                <div className="min-w-0 space-y-6">
                 <section className="min-w-0 rounded-2xl border border-slate-800 bg-slate-900/60">
                   <div className="flex items-center justify-between border-b border-slate-800 p-5"><div><div className="flex items-center gap-2"><Zap size={16} className="text-blue-400" /><h3 className="font-semibold text-white">Real-time escalation activity</h3></div><p className="mt-1 text-xs text-slate-600">Every technician attempt is recorded as the workflow progresses.</p></div><div className="flex items-center gap-2 text-[10px] text-slate-600">{live && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />}Socket live</div></div>
                   {!history.length ? <div className="p-10 text-center"><Clock3 className="mx-auto text-slate-700" /><p className="mt-3 text-sm text-slate-500">Waiting for the first escalation event…</p></div> : <div className="p-5"><div className="relative ml-2 border-l border-slate-800 pl-6">{history.map((entry, index) => <div key={`${entry.level}-${entry.startedAt}-${index}`} className="relative pb-7 last:pb-1"><div className="absolute -left-[31px] top-1 flex h-3 w-3 items-center justify-center rounded-full border-2 border-[#080d16] bg-blue-500" /><div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4"><div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-md bg-slate-800 px-2 py-1 text-[10px] font-bold text-slate-300">LEVEL {entry.level}</span><Pill className={historyStyles[entry.status] || "border-slate-700 bg-slate-800 text-slate-400"}>{entry.status || "UNKNOWN"}</Pill></div><div className="mt-3 flex items-center gap-2"><UserRound size={14} className="text-slate-600" /><span className="text-sm font-semibold text-white">{entry.technicianName || "Unknown technician"}</span><span className="font-mono text-[10px] text-slate-600">{entry.technicianPhone || ""}</span></div></div><div className="text-left sm:text-right"><p className="text-[10px] text-slate-600">Started</p><p className="text-xs text-slate-400">{formatTime(entry.startedAt)}</p><p className="mt-1 text-[10px] text-slate-600">Duration {elapsed(entry.startedAt, entry.completedAt)}</p></div></div>{entry.response && <p className="mt-3 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-xs leading-relaxed text-slate-400">{entry.response}</p>}{(entry.provider || entry.providerCode || entry.callId) && <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-600"><span>Provider: {entry.provider || "—"}</span><span>Call: {entry.callId || "—"}</span><span>Code: {entry.providerCode || "—"}</span></div>}</div></div>)}</div></div>}
                 </section>
+
+                <section className="min-w-0 rounded-2xl border border-slate-800 bg-slate-900/60">
+                  <div className="flex items-center justify-between border-b border-slate-800 p-5"><div><div className="flex items-center gap-2"><Clock3 size={16} className="text-blue-400" /><h3 className="font-semibold text-white">Incident timeline</h3></div><p className="mt-1 text-xs text-slate-600">Every recorded event, in order - alerts, correlation, severity changes, escalation, comments and resolution.</p></div></div>
+                  {!timeline.length ? <div className="p-10 text-center"><Clock3 className="mx-auto text-slate-700" /><p className="mt-3 text-sm text-slate-500">No timeline events recorded yet.</p></div> : <div className="p-5"><div className="relative ml-2 border-l border-slate-800 pl-6">{timeline.map((event, index) => <div key={`${event.type}-${event.at}-${index}`} className="relative pb-5 last:pb-1"><div className="absolute -left-[31px] top-1 h-3 w-3 rounded-full border-2 border-[#080d16] bg-slate-600" /><div className="flex flex-wrap items-baseline gap-2"><span className="text-[10px] text-slate-600">{formatTime(event.at)}</span><span className="rounded-md bg-slate-800 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-slate-400">{event.type?.replaceAll("_", " ")}</span>{event.actor && event.actor !== "system" && <span className="text-[10px] text-slate-600">· {event.actor}</span>}</div><p className="mt-1 text-sm text-slate-300">{event.message}</p></div>)}</div></div>}
+                  <div className="border-t border-slate-800 p-4"><div className="flex gap-2"><input value={commentDraft} onChange={e => setCommentDraft(e.target.value)} onKeyDown={e => e.key === "Enter" && submitComment()} placeholder="Add a comment…" className="form-input flex-1 text-sm" /><button onClick={submitComment} disabled={commentBusy || !commentDraft.trim()} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{commentBusy ? "Posting…" : "Post"}</button></div></div>
+                </section>
+                </div>
 
                 <aside className="space-y-6">
                   {(blastRadius?.downstreamDevices?.length > 0 || incident?.impactedDevices?.length > 0) && <section className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">

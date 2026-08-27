@@ -1,5 +1,6 @@
 import Incident from "../models/Incident.js";
 import Device from "../models/Device.js";
+import { buildTimelineEvent } from "./timelineService.js";
 
 const ACTIVE_INCIDENT_STATUSES = ["OPEN", "CALLING", "ACKNOWLEDGED", "ESCALATING", "FAILED"];
 
@@ -91,7 +92,7 @@ export async function sweepActiveIncidentSeverity() {
 
     const result = await Incident.findOneAndUpdate(
       { incidentId: incident.incidentId, status: { $in: ACTIVE_INCIDENT_STATUSES } },
-      { severity: nextSeverity },
+      { $set: { severity: nextSeverity }, $push: { timeline: buildTimelineEvent("SEVERITY_CHANGED", `Severity escalated from ${incident.severity} to ${nextSeverity}.`, { actor: "severity engine" }) } },
       { new: true }
     );
 

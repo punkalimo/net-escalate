@@ -1,6 +1,7 @@
 import Incident from "../models/Incident.js";
 import Technician from "../models/Technician.js";
 import { computeWeightedSeverity } from "./severityService.js";
+import { buildTimelineEvent } from "./timelineService.js";
 
 // Shared incident lifecycle for any monitored fault condition - interface
 // status, interface error-rate degradation, interface flapping, or
@@ -41,7 +42,13 @@ export async function syncFaultIncident({
     if (currentIncidentId) {
       const resolved = await Incident.findOneAndUpdate(
         { incidentId: currentIncidentId, status: { $ne: "RESOLVED" } },
-        { status: "RESOLVED", resolvedAt: new Date() },
+        {
+          $set: { status: "RESOLVED", resolvedAt: new Date() },
+          $push: { timeline: { $each: [
+            buildTimelineEvent("DEVICE_RECOVERY_DETECTED", `${deviceLabel} recovered.`, { actor: "monitoring" }),
+            buildTimelineEvent("INCIDENT_RESOLVED", "Incident automatically resolved after recovery was confirmed.", { actor: "system" })
+          ] } }
+        },
         { new: true }
       );
       if (resolved && global.io) global.io.emit("incident_updated", resolved);
@@ -113,7 +120,11 @@ export async function syncFaultIncident({
           source,
           fingerprint,
           interfaceName,
-          interfaceIndex
+          interfaceIndex,
+          timeline: [
+            buildTimelineEvent("ALERT_RECEIVED", description, { actor: "monitoring" }),
+            buildTimelineEvent("INCIDENT_CREATED", `Incident ${incidentId} created for ${deviceLabel}.`, { actor: "system" })
+          ]
         });
 
         if (global.io) global.io.emit("incident_created", incident);

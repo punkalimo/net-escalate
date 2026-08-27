@@ -19,6 +19,21 @@ const escalationHistorySchema = new mongoose.Schema(
   { _id: false }
 );
 
+const timelineEventSchema = new mongoose.Schema(
+  {
+    type: {
+      type: String,
+      enum: ["ALERT_RECEIVED", "ALERT_CORRELATED", "INCIDENT_CREATED", "SEVERITY_CHANGED", "ENGINEER_ASSIGNED", "NOTIFICATION_SENT", "INCIDENT_ACKNOWLEDGED", "ENGINEER_COMMENT", "ESCALATION_TRIGGERED", "DEVICE_RECOVERY_DETECTED", "INCIDENT_RESOLVED", "INCIDENT_REOPENED", "INCIDENT_CLOSED", "MERGED", "UNMERGED"],
+      required: true
+    },
+    message: { type: String, required: true },
+    actor: { type: String, default: "system" },
+    metadata: { type: mongoose.Schema.Types.Mixed, default: null },
+    at: { type: Date, default: Date.now }
+  },
+  { _id: false }
+);
+
 const impactedDeviceSchema = new mongoose.Schema(
   {
     deviceId: { type: String, required: true },
@@ -71,7 +86,8 @@ const incidentSchema = new mongoose.Schema(
     // they explicitly merge/unmerge again (or the incident resolves).
     correlationManual: { type: Boolean, default: false },
     escalationHistory: { type: [escalationHistorySchema], default: [] },
-    impactedDevices: { type: [impactedDeviceSchema], default: [] }
+    impactedDevices: { type: [impactedDeviceSchema], default: [] },
+    timeline: { type: [timelineEventSchema], default: [] }
   },
   { timestamps: true }
 );

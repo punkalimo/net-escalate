@@ -3,6 +3,7 @@ import Device from "../models/Device.js";
 import { discoverTopology } from "./topologyService.js";
 import { computeRootCause } from "./rootCauseService.js";
 import { mergeDownstream, computeBlastRadius } from "./blastRadiusService.js";
+import { pushTimelineEvent } from "./timelineService.js";
 
 const MAX_CORRELATION_HOPS = 3;
 const ACTIVE_STATUSES = new Set(["OPEN", "CALLING", "ACKNOWLEDGED", "ESCALATING", "FAILED"]);
@@ -224,22 +225,26 @@ async function runCorrelation({ forceTopology = false } = {}) {
     if (!children.length) continue;
 
     const correlationGroupId = computeCorrelationGroupId(rootDevice, root);
+    const rootWasAlreadyThisGroup = root.correlationGroupId === correlationGroupId;
     assigned.add(root.incidentId);
     root.correlationGroupId = correlationGroupId;
     root.correlationRole = "ROOT";
     root.parentIncidentId = null;
     root.correlationConfidence = 100;
     root.correlationEvidence = ["Selected as the earliest/highest-severity active fault explaining downstream symptoms.", ...(rootDevice.status === "DOWN" ? [`${rootDevice.hostname} is DOWN.`] : [])];
+    if (!rootWasAlreadyThisGroup) pushTimelineEvent(root, "ALERT_CORRELATED", `Identified as the root cause for a ${children.length}-incident correlation group.`, { actor: "correlation engine" });
     await root.save();
 
     const groupChildren = [];
     for (const relation of children.sort((a, b) => b.score - a.score)) {
       assigned.add(relation.child.incidentId);
+      const childWasAlreadyThisGroup = relation.child.correlationGroupId === correlationGroupId;
       relation.child.correlationGroupId = correlationGroupId;
       relation.child.correlationRole = "CHILD";
       relation.child.parentIncidentId = root.incidentId;
       relation.child.correlationConfidence = relation.score;
       relation.child.correlationEvidence = relation.evidence;
+      if (!childWasAlreadyThisGroup) pushTimelineEvent(relation.child, "ALERT_CORRELATED", `Correlated as a downstream symptom of ${root.incidentId}.`, { actor: "correlation engine" });
       await relation.child.save();
       groupChildren.push({
         incidentId: relation.child.incidentId,

@@ -5,6 +5,7 @@ import { processIncident } from "../services/incidentService.js";
 import { correlateActiveIncidents, incidentDeviceMatches } from "../services/incidentCorrelationService.js";
 import { computeRootCause } from "../services/rootCauseService.js";
 import { mergeDownstream, computeBlastRadius } from "../services/blastRadiusService.js";
+import { buildTimelineEvent, pushTimelineEvent } from "../services/timelineService.js";
 
 async function generateUniqueIncidentId() {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -35,7 +36,8 @@ export default function incidentRoutes(io) {
             severity,
             description,
             technician,
-            source: "MANUAL"
+            source: "MANUAL",
+            timeline: [buildTimelineEvent("INCIDENT_CREATED", "Incident manually created.", { actor: technician?.name || "NOC engineer" })]
           });
         } catch (error) {
           if (error?.code !== 11000 || attempt === 4) throw error;
@@ -146,6 +148,7 @@ export default function incidentRoutes(io) {
       target.correlationRole = "ROOT";
       target.parentIncidentId = null;
       target.correlationManual = true;
+      pushTimelineEvent(target, "MERGED", `${source.incidentId} was manually merged into this incident as a correlated symptom.`, { actor: "NOC engineer" });
       await target.save();
 
       source.correlationGroupId = groupId;
@@ -154,12 +157,14 @@ export default function incidentRoutes(io) {
       source.correlationConfidence = 100;
       source.correlationEvidence = ["Manually merged by a NOC engineer."];
       source.correlationManual = true;
+      pushTimelineEvent(source, "MERGED", `Manually merged into ${target.incidentId} as a correlated symptom.`, { actor: "NOC engineer" });
       await source.save();
 
       for (const child of cascaded) {
         child.correlationGroupId = groupId;
         child.parentIncidentId = target.incidentId;
         child.correlationManual = true;
+        pushTimelineEvent(child, "MERGED", `Carried along into ${target.incidentId}'s group when ${source.incidentId} (its previous root) was merged.`, { actor: "NOC engineer" });
         await child.save();
         if (io) io.emit("incident_updated", child);
       }
@@ -186,12 +191,14 @@ export default function incidentRoutes(io) {
         return res.status(400).json({ success: false, message: "Only a correlated child incident can be unmerged. To dissolve a whole group, unmerge each child individually." });
       }
 
+      const previousParent = incident.parentIncidentId;
       incident.correlationGroupId = null;
       incident.correlationRole = "STANDALONE";
       incident.parentIncidentId = null;
       incident.correlationConfidence = null;
       incident.correlationEvidence = [];
       incident.correlationManual = true;
+      pushTimelineEvent(incident, "UNMERGED", `Manually unmerged from root incident ${previousParent}.`, { actor: "NOC engineer" });
       await incident.save();
       if (io) io.emit("incident_updated", incident);
 
@@ -201,6 +208,25 @@ export default function incidentRoutes(io) {
     } catch (error) {
       console.error("UNMERGE INCIDENT ERROR:", error);
       return res.status(500).json({ success: false, message: "Failed to unmerge incident.", error: error.message });
+    }
+  });
+
+  router.post("/:incidentId/comment", async (req, res) => {
+    try {
+      const message = String(req.body?.message || "").trim();
+      const actor = String(req.body?.actor || "NOC engineer").trim() || "NOC engineer";
+      if (!message) return res.status(400).json({ success: false, message: "Comment message is required." });
+
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+
+      pushTimelineEvent(incident, "ENGINEER_COMMENT", message, { actor });
+      await incident.save();
+      if (io) io.emit("incident_updated", incident);
+      return res.json({ success: true, incident: incident.toObject() });
+    } catch (error) {
+      console.error("INCIDENT COMMENT ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to add comment.", error: error.message });
     }
   });
 
@@ -278,6 +304,7 @@ export default function incidentRoutes(io) {
 
       incident.status = "RESOLVED";
       incident.resolvedAt = new Date();
+      pushTimelineEvent(incident, "INCIDENT_RESOLVED", "Incident manually resolved by a NOC engineer.", { actor: "NOC engineer" });
       await incident.save();
       if (io) io.emit("incident_updated", incident);
       return res.json({ success: true, incident });
