@@ -229,16 +229,129 @@ export async function discoverInterfaces(device) {
     } catch (error) {
       console.info(`[SNMP] Optional ifXTable unavailable on ${device.hostname || device.ipAddress}: ${error.message}`);
     }
+    // Duplex (EtherLike-MIB dot3StatsDuplexStatus) isn't part of ifEntry/
+    // ifXTable, but it changes on the same rare, config-driven cadence as
+    // admin status - fetched here, once per discovery/admin-sync cycle, and
+    // cached, rather than re-walked on every fast poll.
+    try {
+      await walkSubtree(session, IF_OIDS.duplex, v => {
+        const parts = v.oid.split(".");
+        const index = parts[parts.length - 1];
+        const item = interfaces.get(index) || interfaceRecord(index);
+        item.duplexRaw = Number(v.value);
+        interfaces.set(index, item);
+      });
+    } catch (error) {
+      console.info(`[SNMP] Optional duplex status unavailable on ${device.hostname || device.ipAddress}: ${error.message}`);
+    }
     const result = [...interfaces.values()]
       .filter(item => Number.isInteger(item.ifIndex) && item.ifIndex > 0)
       .sort((a, b) => a.ifIndex - b.ifIndex)
-      .map(item => ({ ...item, ifSpeedMbps: speedFromValues(item.highSpeed, item.ifSpeed), displayName: item.ifName || item.ifDescr || `Interface ${item.ifIndex}` }));
+      .map(item => ({ ...item, ifSpeedMbps: speedFromValues(item.highSpeed, item.ifSpeed), duplex: decodeDuplex(item.duplexRaw), displayName: item.ifName || item.ifDescr || `Interface ${item.ifIndex}` }));
     safeClose(session);
     return result;
   } catch (error) {
     safeClose(session);
     throw normaliseSnmpError(error);
   }
+}
+
+// Fast-cycle poll data for every interface on a device, in as few SNMP
+// round trips as possible regardless of interface count - the scaling
+// requirement for polling beyond a handful of devices.
+//
+// ifOperStatus and the octet/error/discard counters all live in the same
+// ifEntry table (1.3.6.1.2.1.2.2.1), so ONE subtree walk of that base OID
+// returns every interface's row in a handful of GETBULK round trips total,
+// not one GET per interface. net-snmp's walk API only walks one base OID at
+// a time, so this - rather than a separate walk per column - is what
+// actually minimises round trips: splitting into six column-only walks
+// would mean six separate multi-round-trip walks instead of one.
+//
+// ifAdminStatus IS present in this same walk response, but it is
+// deliberately ignored here: admin status is synced on its own slow cadence
+// (see discoverInterfaces, used for that sync) and alerting decisions use
+// that cached value, not whatever this fast walk happens to also carry back
+// - the cadence separation is a behavioural guarantee (a transient blip on
+// this one column can't flip an alerting decision), not just a bandwidth
+// optimisation.
+//
+// HC (64-bit) octet counters live in ifXTable and aren't part of ifEntry,
+// so on SNMPv2c/v3 two further targeted walks fetch just those two columns.
+// Total per fast poll: 1 walk on SNMPv1, 3 walks on v2c/v3 - independent of
+// how many interfaces the device has.
+export async function bulkGetInterfaceOperationalTable(device) {
+  const session = createSnmpSession(device);
+  const version = normaliseSnmpVersion(device.snmp?.version);
+  const useHc = version !== "1";
+  const rows = new Map();
+
+  const row = ifIndex => {
+    if (!rows.has(ifIndex)) rows.set(ifIndex, { ifIndex });
+    return rows.get(ifIndex);
+  };
+
+  const consumeIfEntry = varbind => {
+    const parts = varbind.oid.split(".");
+    const column = parts[parts.length - 2];
+    const ifIndex = Number(parts[parts.length - 1]);
+    if (!Number.isInteger(ifIndex) || ifIndex <= 0) return;
+    const value = varbind.value;
+    switch (column) {
+      case "8": row(ifIndex).operStatus = Number(value); break;
+      case "10": row(ifIndex).inOctets = Number(value); break;
+      case "13": row(ifIndex).inDiscards = Number(value); break;
+      case "14": row(ifIndex).inErrors = Number(value); break;
+      case "16": row(ifIndex).outOctets = Number(value); break;
+      case "19": row(ifIndex).outDiscards = Number(value); break;
+      case "20": row(ifIndex).outErrors = Number(value); break;
+    }
+  };
+
+  const consumeHcColumn = (varbind, key) => {
+    const parts = varbind.oid.split(".");
+    const ifIndex = Number(parts[parts.length - 1]);
+    if (!Number.isInteger(ifIndex) || ifIndex <= 0) return;
+    row(ifIndex)[key] = decodeCounter64(varbind.value);
+  };
+
+  try {
+    await walkSubtree(session, "1.3.6.1.2.1.2.2.1", consumeIfEntry);
+
+    if (useHc) {
+      try {
+        await walkSubtree(session, IF_OIDS.hcInOctets, v => consumeHcColumn(v, "hcInOctets"));
+        await walkSubtree(session, IF_OIDS.hcOutOctets, v => consumeHcColumn(v, "hcOutOctets"));
+      } catch (error) {
+        console.info(`[SNMP] HC counters unavailable on ${device.hostname || device.ipAddress}, falling back to 32-bit: ${error.message}`);
+      }
+    }
+
+    safeClose(session);
+  } catch (error) {
+    safeClose(session);
+    throw normaliseSnmpError(error);
+  }
+
+  const result = new Map();
+  for (const [ifIndex, values] of rows) {
+    const hcAvailable = Number.isFinite(values.hcInOctets) && Number.isFinite(values.hcOutOctets);
+    const inOctets = hcAvailable ? values.hcInOctets : (values.inOctets ?? 0);
+    const outOctets = hcAvailable ? values.hcOutOctets : (values.outOctets ?? 0);
+    result.set(ifIndex, {
+      ifIndex,
+      operStatus: values.operStatus ?? null,
+      inOctets,
+      outOctets,
+      octetSource: hcAvailable ? "HC" : "legacy",
+      inErrors: values.inErrors ?? 0,
+      outErrors: values.outErrors ?? 0,
+      inDiscards: values.inDiscards ?? 0,
+      outDiscards: values.outDiscards ?? 0,
+      checkedAt: new Date()
+    });
+  }
+  return result;
 }
 
 export async function getInterfaceStatus(device, ifIndex) {
@@ -285,4 +398,80 @@ export async function getInterfaceMetrics(device, ifIndex) {
   });
 }
 
-export default { testSnmpConnection, discoverInterfaces, getInterfaceStatus, getInterfaceMetrics, decodeSnmpText, decodeSnmpBinary, decodeDuplex, decodeCounter64, speedFromValues, normaliseSnmpVersion };
+// CISCO-PROCESS-MIB cpmCPUTotal5minRev - CPU utilization averaged over the
+// last 5 minutes, as a corrected 0-100 percentage (the older
+// cpmCPUTotal5min column saturates and is unreliable above 100% loads on
+// some platforms; the "Rev" column is the documented replacement).
+const CISCO_CPU_5MIN_REV_OID = "1.3.6.1.4.1.9.9.109.1.1.1.1.8";
+
+// CISCO-MEMORY-POOL-MIB ciscoMemoryPoolTable columns: name, bytes used,
+// bytes free. Indexed per memory pool (Processor, I/O, etc.) - walked in
+// full since pool indices aren't predictable ahead of time, same reasoning
+// as the interface table walks above.
+const CISCO_MEM_POOL_NAME_OID = "1.3.6.1.4.1.9.9.48.1.1.1.2";
+const CISCO_MEM_POOL_USED_OID = "1.3.6.1.4.1.9.9.48.1.1.1.5";
+const CISCO_MEM_POOL_FREE_OID = "1.3.6.1.4.1.9.9.48.1.1.1.6";
+
+function lastOidSegment(oid) {
+  const parts = oid.split(".");
+  return parts[parts.length - 1];
+}
+
+// Device-level CPU/memory poll, using the same bulk-walk-per-table approach
+// as interface polling: a small fixed number of GETBULK walks regardless of
+// how many CPU cores or memory pools the device reports. Both MIBs are
+// Cisco-proprietary; a device that doesn't support them (or isn't Cisco)
+// simply comes back with null values for that metric rather than failing
+// the whole poll - CPU/memory monitoring is additive, not a prerequisite
+// for interface/device monitoring to keep working.
+export async function getDeviceSystemMetrics(device) {
+  const session = createSnmpSession(device);
+  const cpuRows = new Map();
+  const poolRows = new Map();
+
+  const poolRow = index => {
+    if (!poolRows.has(index)) poolRows.set(index, { index });
+    return poolRows.get(index);
+  };
+
+  try {
+    await walkSubtree(session, CISCO_CPU_5MIN_REV_OID, varbind => {
+      cpuRows.set(lastOidSegment(varbind.oid), Number(varbind.value));
+    });
+  } catch (error) {
+    console.info(`[SNMP] CISCO-PROCESS-MIB unavailable on ${device.hostname || device.ipAddress}: ${error.message}`);
+  }
+
+  try {
+    await walkSubtree(session, CISCO_MEM_POOL_NAME_OID, varbind => { poolRow(lastOidSegment(varbind.oid)).name = decodeSnmpText(varbind.value); });
+    await walkSubtree(session, CISCO_MEM_POOL_USED_OID, varbind => { poolRow(lastOidSegment(varbind.oid)).used = Number(varbind.value); });
+    await walkSubtree(session, CISCO_MEM_POOL_FREE_OID, varbind => { poolRow(lastOidSegment(varbind.oid)).free = Number(varbind.value); });
+  } catch (error) {
+    console.info(`[SNMP] CISCO-MEMORY-POOL-MIB unavailable on ${device.hostname || device.ipAddress}: ${error.message}`);
+  }
+
+  safeClose(session);
+
+  const cpuValues = [...cpuRows.values()].filter(value => Number.isFinite(value));
+  // Multiple cores report as separate rows; the busiest core is what
+  // actually matters for "is this device under CPU pressure," not the mean.
+  const cpuPercent = cpuValues.length ? Math.max(...cpuValues) : null;
+
+  const pools = [...poolRows.values()].filter(row => Number.isFinite(row.used) && Number.isFinite(row.free));
+  const primaryPool = pools.find(row => /processor/i.test(row.name || "")) || pools[0] || null;
+  const memoryUsedBytes = primaryPool ? primaryPool.used : null;
+  const memoryFreeBytes = primaryPool ? primaryPool.free : null;
+  const memoryTotalBytes = primaryPool ? primaryPool.used + primaryPool.free : null;
+  const memoryUtilizationPercent = memoryTotalBytes ? (memoryUsedBytes / memoryTotalBytes) * 100 : null;
+
+  return {
+    cpuPercent,
+    memoryPoolName: primaryPool?.name || null,
+    memoryUsedBytes,
+    memoryFreeBytes,
+    memoryUtilizationPercent,
+    checkedAt: new Date()
+  };
+}
+
+export default { testSnmpConnection, discoverInterfaces, bulkGetInterfaceOperationalTable, getInterfaceStatus, getInterfaceMetrics, getDeviceSystemMetrics, decodeSnmpText, decodeSnmpBinary, decodeDuplex, decodeCounter64, speedFromValues, normaliseSnmpVersion };

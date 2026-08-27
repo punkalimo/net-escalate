@@ -10,6 +10,8 @@ export async function createIncident(incident) { return (await api.post("/incide
 export async function resolveIncident(incidentId) { return (await api.patch(`/incidents/${incidentId}/resolve`)).data; }
 export async function getIncidentCorrelation(refresh = false) { return (await api.get(`/incidents/correlation${refresh ? "?refresh=true" : ""}`)).data; }
 export async function rebuildIncidentCorrelation() { return (await api.post("/incidents/correlation/rebuild")).data; }
+export async function mergeIncident(incidentId, intoIncidentId) { return (await api.post(`/incidents/${incidentId}/merge`, { intoIncidentId })).data; }
+export async function unmergeIncident(incidentId) { return (await api.post(`/incidents/${incidentId}/unmerge`)).data; }
 export async function getTechnicians() { return (await api.get("/technicians")).data; }
 export async function createTechnician(technician) { return (await api.post("/technicians", technician)).data; }
 export async function updateTechnician(technicianId, technician) { return (await api.patch(`/technicians/${technicianId}`, technician)).data; }
@@ -28,6 +30,8 @@ export async function pollDevice(deviceId) { return (await api.post(`/devices/${
 export async function discoverDeviceInterfaces(deviceId) { return (await api.post(`/interfaces/${deviceId}/discover`)).data; }
 export async function getDeviceInterfaces(deviceId) { return (await api.get(`/interfaces/${deviceId}`)).data; }
 export async function getInterfaceHistory(deviceId, ifIndex, hours = 24) { const params = { hours }; if (ifIndex != null) params.ifIndex = ifIndex; return (await api.get(`/interfaces/${deviceId}/history`, { params })).data; }
+export async function setInterfaceMonitored(deviceId, ifIndex, monitored) { return (await api.patch(`/interfaces/${deviceId}/${ifIndex}/monitored`, { monitored })).data; }
+export async function getSystemHealthHistory(deviceId, metric, hours = 24) { const params = { hours }; if (metric) params.metric = metric; return (await api.get(`/devices/${deviceId}/system-health/history`, { params })).data; }
 export async function getTopology() { return (await api.get("/topology")).data; }
 export async function discoverTopology() { return (await api.post("/topology/discover")).data; }
 export async function getDevicePath(deviceId) { return (await api.get(`/topology/devices/${deviceId}/path`)).data; }

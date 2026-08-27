@@ -2,6 +2,7 @@ import express from "express";
 import net from "net";
 
 import Device from "../models/Device.js";
+import DeviceSystemSample from "../models/DeviceSystemSample.js";
 
 import {
     startDeviceMonitoring,
@@ -206,6 +207,30 @@ router.get(
                 error:
                     error.message
             });
+        }
+    }
+);
+
+router.get(
+    "/:deviceId/system-health/history",
+    async (req, res) => {
+        try {
+            const device = await Device.findOne({ deviceId: req.params.deviceId }).select("deviceId").lean();
+            if (!device) {
+                return res.status(404).json({ success: false, message: "Device not found." });
+            }
+
+            const hours = Math.min(168, Math.max(1, Number(req.query.hours || 24)));
+            const metric = ["cpu", "memory"].includes(req.query.metric) ? req.query.metric : null;
+            const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+            const query = { deviceId: device.deviceId, sampledAt: { $gte: since } };
+            if (metric) query.metric = metric;
+
+            const samples = await DeviceSystemSample.find(query).sort({ sampledAt: 1 }).lean();
+            return res.json({ success: true, deviceId: device.deviceId, hours, samples });
+        } catch (error) {
+            console.error("DEVICE SYSTEM HEALTH HISTORY ERROR:", error);
+            return res.status(500).json({ success: false, message: "Failed to retrieve system health history.", error: error.message });
         }
     }
 );

@@ -9,6 +9,7 @@ import Incident from "../models/Incident.js";
 import Technician from "../models/Technician.js";
 
 import { processIncident } from "./incidentService.js";
+import { computeWeightedSeverity } from "./severityService.js";
 
 const execAsync = promisify(exec);
 
@@ -899,10 +900,15 @@ async function createDeviceIncident(
         generateIncidentId();
 
     const severity =
-        determineIncidentSeverity(
-            device,
-            result
-        );
+        computeWeightedSeverity({
+            baseSeverity: determineIncidentSeverity(
+                device,
+                result
+            ),
+            deviceRole: device.role,
+            impactedDeviceCount: 0,
+            activeMinutes: 0
+        });
 
     let description =
         "";
@@ -982,6 +988,9 @@ async function createDeviceIncident(
     const incident =
         await Incident.create({
             incidentId,
+
+            deviceId:
+                device.deviceId,
 
             device:
                 device.hostname,

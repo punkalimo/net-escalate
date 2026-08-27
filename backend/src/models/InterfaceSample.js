@@ -15,8 +15,13 @@ const interfaceSampleSchema = new mongoose.Schema(
     outErrors: { type: Number, default: 0 },
     inDiscards: { type: Number, default: 0 },
     outDiscards: { type: Number, default: 0 },
+    // Precomputed rates (per minute), same reasoning as inBps/outBps being
+    // precomputed rather than making every reader re-derive deltas from
+    // raw cumulative counters across samples.
+    errorRatePerMin: { type: Number, default: null },
+    discardRatePerMin: { type: Number, default: null },
     duplex: { type: String, default: "UNKNOWN" },
-    health: { type: String, enum: ["HEALTHY", "WARNING", "DEGRADED", "CRITICAL", "DOWN", "UNKNOWN"], default: "UNKNOWN" },
+    health: { type: String, enum: ["HEALTHY", "WARNING", "DEGRADED", "CRITICAL", "DOWN", "ADMIN_DOWN", "UNMONITORED", "UNKNOWN"], default: "UNKNOWN" },
     healthScore: { type: Number, default: null },
     sampledAt: { type: Date, default: Date.now, index: true },
     expiresAt: { type: Date, required: true }
