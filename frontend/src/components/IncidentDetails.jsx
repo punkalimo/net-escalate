@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
-import { Activity, AlertTriangle, CheckCircle2, Clock3, Phone, Radio, RefreshCw, Server, ShieldAlert, UserRound, X, Zap } from "lucide-react";
-import { getIncident, resolveIncident } from "../services/api";
+import { Activity, AlertTriangle, CheckCircle2, Clock3, GitMerge, Network, Phone, Radio, RefreshCw, Server, ShieldAlert, Unlink, UserRound, X, Zap } from "lucide-react";
+import { getIncident, getIncidents, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
@@ -84,6 +84,56 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
   const currentStage = incident?.escalationLevel || 1;
   const live = ["CALLING", "ESCALATING"].includes(incident?.status);
 
+  const [correlationBusy, setCorrelationBusy] = useState(false);
+  const [correlationError, setCorrelationError] = useState("");
+  const [mergePickerOpen, setMergePickerOpen] = useState(false);
+  const [mergeCandidates, setMergeCandidates] = useState([]);
+  const [mergeTargetId, setMergeTargetId] = useState("");
+
+  async function openMergePicker() {
+    setMergePickerOpen(true);
+    setCorrelationError("");
+    try {
+      const result = await getIncidents();
+      if (!result.success) throw new Error(result.message || "Failed to load incidents.");
+      const candidates = (result.incidents || []).filter(i => i.incidentId !== incident.incidentId && i.status !== "RESOLVED" && !(i.correlationRole === "CHILD" && i.parentIncidentId));
+      setMergeCandidates(candidates);
+      setMergeTargetId(candidates[0]?.incidentId || "");
+    } catch (e) {
+      setCorrelationError(e.response?.data?.message || e.message || "Unable to load incidents to merge into.");
+    }
+  }
+
+  async function merge() {
+    if (!mergeTargetId) return;
+    setCorrelationBusy(true);
+    setCorrelationError("");
+    try {
+      const result = await mergeIncident(incident.incidentId, mergeTargetId);
+      if (!result.success) throw new Error(result.message || "Failed to merge incident.");
+      setIncident(result.source);
+      setMergePickerOpen(false);
+    } catch (e) {
+      setCorrelationError(e.response?.data?.message || e.message || "Unable to merge incident.");
+    } finally {
+      setCorrelationBusy(false);
+    }
+  }
+
+  async function unmerge() {
+    setCorrelationBusy(true);
+    setCorrelationError("");
+    try {
+      const result = await unmergeIncident(incident.incidentId);
+      if (!result.success) throw new Error(result.message || "Failed to unmerge incident.");
+      setIncident(result.incident);
+    } catch (e) {
+      setCorrelationError(e.response?.data?.message || e.message || "Unable to unmerge incident.");
+    } finally {
+      setCorrelationBusy(false);
+    }
+  }
+
   async function resolve() {
     if (!incident?.incidentId || incident.status === "RESOLVED") return;
     setBusy(true);
@@ -158,6 +208,27 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                       <Pill className={d.status === "DOWN" ? "border-red-500/30 bg-red-500/10 text-red-400" : "border-slate-700 bg-slate-800 text-slate-400"}>{d.status || "UNKNOWN"}</Pill>
                     </div>)}</div>
                   </section>}
+                  <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
+                    <div className="flex items-center gap-2"><Network size={16} className="text-purple-400" /><h3 className="font-semibold text-white">Correlation</h3></div>
+                    {correlationError && <p className="mt-3 text-xs text-red-400">{correlationError}</p>}
+                    {incident?.correlationRole === "ROOT" && <div className="mt-3"><Pill className="border-red-500/20 bg-red-500/5 text-red-400">Root cause</Pill><p className="mt-2 text-xs leading-5 text-slate-500">Other active incidents are correlated to this one as a probable downstream symptom. See the RCA panel for the full group ({incident.correlationGroupId}).</p></div>}
+                    {incident?.correlationRole === "CHILD" && <div className="mt-3">
+                      <Pill className="border-purple-500/20 bg-purple-500/5 text-purple-400">Correlated</Pill>
+                      <p className="mt-2 text-xs leading-5 text-slate-500">Linked as a probable downstream symptom of <span className="font-mono text-slate-300">{incident.parentIncidentId}</span>{incident.correlationConfidence != null && ` · ${incident.correlationConfidence}% confidence`}.</p>
+                      {incident.correlationEvidence?.length > 0 && <div className="mt-2 space-y-1">{incident.correlationEvidence.map((e, i) => <p key={i} className="text-[10px] leading-4 text-slate-600">• {e}</p>)}</div>}
+                      <button onClick={unmerge} disabled={correlationBusy} className="mt-3 flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800 disabled:opacity-50"><Unlink size={13} />{correlationBusy ? "Unmerging…" : "Unmerge from root"}</button>
+                    </div>}
+                    {(!incident?.correlationRole || incident.correlationRole === "STANDALONE") && <div className="mt-3">
+                      <p className="text-xs leading-5 text-slate-500">No correlation detected for this incident yet.</p>
+                      {!mergePickerOpen ? <button onClick={openMergePicker} className="mt-3 flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800"><GitMerge size={13} />Merge into…</button> : <div className="mt-3 space-y-2">
+                        <select value={mergeTargetId} onChange={e => setMergeTargetId(e.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-2 text-xs text-slate-300">
+                          {mergeCandidates.length === 0 && <option value="">No other active incidents</option>}
+                          {mergeCandidates.map(c => <option key={c.incidentId} value={c.incidentId}>{c.incidentId} · {c.device}</option>)}
+                        </select>
+                        <div className="flex gap-2"><button onClick={merge} disabled={correlationBusy || !mergeTargetId} className="flex-1 rounded-lg bg-purple-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{correlationBusy ? "Merging…" : "Confirm merge"}</button><button onClick={() => setMergePickerOpen(false)} className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-400">Cancel</button></div>
+                      </div>}
+                    </div>}
+                  </section>
                   <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5"><div className="flex items-center gap-2"><Radio size={16} className="text-blue-400" /><h3 className="font-semibold text-white">Escalation command</h3></div><div className="mt-5 space-y-3">{[1,2,3].map(level=>{const activeLevel=currentStage===level;const completed=currentStage>level||incident?.status==="ACKNOWLEDGED"||incident?.status==="RESOLVED";return <div key={level} className={`flex items-center gap-3 rounded-xl border p-3 ${activeLevel?"border-blue-500/30 bg-blue-500/10":"border-slate-800 bg-slate-950/40"}`}><div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${completed?"bg-emerald-500/15 text-emerald-400":activeLevel?"bg-blue-500/15 text-blue-400":"bg-slate-800 text-slate-600"}`}>{completed?"✓":`L${level}`}</div><div className="min-w-0"><p className="text-xs font-semibold text-slate-300">Level {level}</p><p className="text-[10px] text-slate-600">{activeLevel?"Current escalation stage":completed?"Completed":"Standby"}</p></div>{activeLevel&&<span className="ml-auto h-2 w-2 animate-pulse rounded-full bg-blue-400"/>}</div>})}</div></section>
                   {incident?.acknowledgement && <section className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5"><div className="flex gap-3"><CheckCircle2 className="shrink-0 text-emerald-400" size={18} /><div><p className="text-xs font-semibold text-emerald-300">Technician acknowledgement</p><p className="mt-1 text-sm leading-relaxed text-slate-400">{incident.acknowledgement}</p></div></div></section>}
                 </aside>

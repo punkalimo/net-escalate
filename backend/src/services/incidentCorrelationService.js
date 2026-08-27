@@ -12,7 +12,11 @@ function normalize(value) {
   return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
-function incidentDeviceMatches(incident, device) {
+// Exact deviceId match first - every DEVICE_MONITOR/INTERFACE_HEALTH/SYSTEM_HEALTH
+// incident carries one. Fuzzy label matching is only a fallback for MANUAL
+// incidents, which have no deviceId to anchor to.
+export function incidentDeviceMatches(incident, device) {
+  if (incident.deviceId) return incident.deviceId === device.deviceId;
   const candidates = [device.deviceId, device.hostname, device.ipAddress].map(normalize).filter(Boolean);
   const target = normalize(incident.device);
   return Boolean(target && candidates.some(candidate => candidate === target || candidate.includes(target) || target.includes(candidate)));
@@ -58,7 +62,23 @@ function shortestPath(graph, source, target) {
   return null;
 }
 
-function scoreRelationship(root, child, path, rootDevice, childDevice) {
+// Pure, in-memory ancestor walk over the already-loaded device list - reuses
+// the same parentDeviceId hierarchy the real-time device-monitor suppression
+// mechanism (deviceMonitoringService.js) relies on, without any extra DB
+// round-trips inside the correlation loop.
+export function isDeviceAncestor(rootDeviceId, childDevice, deviceById, maxHops = 10) {
+  let current = childDevice;
+  const visited = new Set([childDevice?.deviceId]);
+  for (let hops = 0; hops < maxHops && current?.parentDeviceId; hops += 1) {
+    if (current.parentDeviceId === rootDeviceId) return true;
+    if (visited.has(current.parentDeviceId)) break;
+    visited.add(current.parentDeviceId);
+    current = deviceById.get(current.parentDeviceId);
+  }
+  return false;
+}
+
+function scoreRelationship(root, child, path, rootDevice, childDevice, deviceById) {
   let score = 0;
   const evidence = [];
   if (rootDevice?.status === "DOWN") { score += 35; evidence.push(`${rootDevice.hostname} is DOWN`); }
@@ -69,6 +89,7 @@ function scoreRelationship(root, child, path, rootDevice, childDevice) {
   else if (path?.hops === 2) { score += 15; evidence.push("devices are two topology hops apart"); }
   else if (path?.hops === 3) { score += 8; evidence.push("devices are within three topology hops"); }
   if (new Date(child.createdAt || 0) >= new Date(root.createdAt || 0)) { score += 10; evidence.push("child incident started after root incident"); }
+  if (deviceById && rootDevice && childDevice && isDeviceAncestor(rootDevice.deviceId, childDevice, deviceById)) { score += 20; evidence.push(`${childDevice.hostname} is a known descendant of ${rootDevice.hostname} (parentDeviceId chain)`); }
   return { score: Math.min(100, score), evidence };
 }
 
@@ -82,9 +103,81 @@ function chooseRoots(incidents, deviceByIncident) {
   });
 }
 
-export async function correlateActiveIncidents({ forceTopology = false } = {}) {
+// Group id is keyed off the root DEVICE, not the root incident. Which
+// incident is "root" can flip between sweeps as severity escalation
+// (severityService.js) reorders chooseRoots() - keying off the incidentId
+// would silently rename the group on every flip and break anything keyed on
+// it (React list keys, the manual-lock mechanism below). The device rarely
+// changes, so the id stays stable across the incident's whole lifetime.
+export function computeCorrelationGroupId(rootDevice, rootIncident) {
+  return rootDevice?.deviceId ? `COR-${rootDevice.deviceId}` : `COR-${rootIncident.incidentId}`;
+}
+
+// Incidents a NOC engineer has manually merged/unmerged are frozen: the
+// sweep never reselects them as a root, never attaches new automatic
+// children to them, and never resets their grouping in the cleanup pass.
+export function partitionManualIncidents(incidents) {
+  const manual = incidents.filter(incident => incident.correlationManual);
+  const automatic = incidents.filter(incident => !incident.correlationManual);
+  return { manual, automatic };
+}
+
+async function resetStandaloneIfNeeded(incident) {
+  if (incident.correlationManual) return false;
+  if (!incident.correlationGroupId && incident.correlationRole === "STANDALONE" && !incident.parentIncidentId) return false;
+  incident.correlationGroupId = null;
+  incident.correlationRole = "STANDALONE";
+  incident.parentIncidentId = null;
+  incident.correlationConfidence = null;
+  incident.correlationEvidence = [];
+  await incident.save();
+  return true;
+}
+
+// Manually-merged groups are already fully formed on the Incident docs
+// (set directly by the merge endpoint) - no topology/scoring work needed to
+// surface them, just read them back into the same `groups` shape the UI
+// expects so RootCauseCenter/IncidentDetails render them alongside
+// automatically-discovered groups.
+function buildManualGroups(incidents) {
+  const groups = [];
+  const roots = incidents.filter(incident => incident.correlationManual && incident.correlationRole === "ROOT" && incident.correlationGroupId);
+  for (const root of roots) {
+    const children = incidents.filter(incident => incident.correlationRole === "CHILD" && incident.correlationGroupId === root.correlationGroupId);
+    if (!children.length) continue;
+    groups.push({
+      correlationGroupId: root.correlationGroupId,
+      rootIncidentId: root.incidentId,
+      rootDevice: root.device,
+      rootSeverity: root.severity,
+      manual: true,
+      children: children.map(child => ({ incidentId: child.incidentId, device: child.device, hops: null, confidence: child.correlationConfidence ?? null, evidence: child.correlationEvidence || [], path: [] })),
+      blastRadius: children.length
+    });
+  }
+  return groups;
+}
+
+async function runCorrelation({ forceTopology = false } = {}) {
   const incidents = await Incident.find({ status: { $in: [...ACTIVE_STATUSES] } }).sort({ createdAt: 1 }).exec();
+
+  // Nothing to correlate with 0-1 active incidents - skip the SNMP-based
+  // topology discovery entirely so an idle network never pays for it, and
+  // this also shrinks the window where a sweep could collide with someone
+  // browsing the Topology page.
+  if (incidents.length < 2) {
+    for (const incident of incidents) await resetStandaloneIfNeeded(incident);
+    const manualGroups = buildManualGroups(incidents);
+    return {
+      success: true, generatedAt: new Date().toISOString(), topologyGeneratedAt: null,
+      activeIncidents: incidents.length, correlatedGroups: manualGroups.length,
+      suppressedChildren: manualGroups.reduce((total, group) => total + group.children.length, 0),
+      groups: manualGroups, incidents: incidents.map(incident => incident.toObject())
+    };
+  }
+
   const devices = await Device.find({}).lean().exec();
+  const deviceById = new Map(devices.map(device => [device.deviceId, device]));
   const topology = await getTopologyCached(forceTopology);
   const graph = buildGraph(topology?.edges || []);
   const deviceByIncident = new Map();
@@ -93,9 +186,11 @@ export async function correlateActiveIncidents({ forceTopology = false } = {}) {
     deviceByIncident.set(incident.incidentId, devices.find(device => incidentDeviceMatches(incident, device)) || null);
   }
 
+  const { manual: manualIncidents, automatic: automaticIncidents } = partitionManualIncidents(incidents);
+
   const groups = [];
-  const assigned = new Set();
-  const orderedRoots = chooseRoots(incidents, deviceByIncident);
+  const assigned = new Set(manualIncidents.map(incident => incident.incidentId));
+  const orderedRoots = chooseRoots(automaticIncidents, deviceByIncident);
 
   for (const root of orderedRoots) {
     if (assigned.has(root.incidentId)) continue;
@@ -103,20 +198,20 @@ export async function correlateActiveIncidents({ forceTopology = false } = {}) {
     if (!rootDevice) continue;
 
     const children = [];
-    for (const child of incidents) {
+    for (const child of automaticIncidents) {
       if (child.incidentId === root.incidentId || assigned.has(child.incidentId)) continue;
       const childDevice = deviceByIncident.get(child.incidentId);
       if (!childDevice || childDevice.deviceId === rootDevice.deviceId) continue;
       const path = shortestPath(graph, rootDevice.deviceId, childDevice.deviceId);
       if (!path || path.hops < 1 || path.hops > MAX_CORRELATION_HOPS) continue;
-      const relationship = scoreRelationship(root, child, path, rootDevice, childDevice);
+      const relationship = scoreRelationship(root, child, path, rootDevice, childDevice, deviceById);
       if (relationship.score < 55) continue;
       children.push({ child, childDevice, path, ...relationship });
     }
 
     if (!children.length) continue;
 
-    const correlationGroupId = `COR-${root.incidentId}`;
+    const correlationGroupId = computeCorrelationGroupId(rootDevice, root);
     assigned.add(root.incidentId);
     root.correlationGroupId = correlationGroupId;
     root.correlationRole = "ROOT";
@@ -155,32 +250,67 @@ export async function correlateActiveIncidents({ forceTopology = false } = {}) {
   }
 
   const correlatedIds = new Set(groups.flatMap(group => [group.rootIncidentId, ...group.children.map(child => child.incidentId)]));
-  for (const incident of incidents) {
+  for (const incident of automaticIncidents) {
     if (correlatedIds.has(incident.incidentId)) continue;
-    if (incident.correlationGroupId || incident.correlationRole || incident.parentIncidentId) {
-      incident.correlationGroupId = null;
-      incident.correlationRole = "STANDALONE";
-      incident.parentIncidentId = null;
-      incident.correlationConfidence = null;
-      incident.correlationEvidence = [];
-      await incident.save();
-    }
+    await resetStandaloneIfNeeded(incident);
   }
+
+  const allGroups = [...groups, ...buildManualGroups(manualIncidents)];
 
   return {
     success: true,
     generatedAt: new Date().toISOString(),
     topologyGeneratedAt: topology?.generatedAt || null,
     activeIncidents: incidents.length,
-    correlatedGroups: groups.length,
-    suppressedChildren: groups.reduce((total, group) => total + group.children.length, 0),
-    groups,
+    correlatedGroups: allGroups.length,
+    suppressedChildren: allGroups.reduce((total, group) => total + group.children.length, 0),
+    groups: allGroups,
     incidents: incidents.map(incident => incident.toObject())
   };
+}
+
+// Concurrency guard: the sweep timer below and up to 4 existing manual call
+// sites (incidentRoutes.js, phase4Routes.js) can now overlap in time. Without
+// this memo, two concurrent runs could both load the same Incident docs and
+// race their .save() calls into a Mongoose version-conflict error. Every
+// caller during an in-flight run gets the same promise/result instead of
+// starting a second pass.
+let inFlight = null;
+
+export async function correlateActiveIncidents(opts = {}) {
+  if (inFlight) return inFlight;
+  inFlight = runCorrelation(opts).finally(() => { inFlight = null; });
+  return inFlight;
 }
 
 export function invalidateIncidentCorrelationTopologyCache() {
   topologyCache = { value: null, expiresAt: 0 };
 }
 
-export default { correlateActiveIncidents, invalidateIncidentCorrelationTopologyCache };
+let sweepTimer = null;
+
+export function startIncidentCorrelationSweep(intervalSeconds = 90) {
+  stopIncidentCorrelationSweep();
+  sweepTimer = setInterval(() => {
+    correlateActiveIncidents()
+      .then(result => { if (global.io) global.io.emit("incident_correlation_updated", result); })
+      .catch(error => console.error(`[CORRELATION SWEEP] Failed: ${error.message}`));
+  }, intervalSeconds * 1000);
+  console.log(`[CORRELATION SWEEP] Started, every ${intervalSeconds}s`);
+}
+
+export function stopIncidentCorrelationSweep() {
+  if (sweepTimer) clearInterval(sweepTimer);
+  sweepTimer = null;
+}
+
+export default {
+  correlateActiveIncidents,
+  invalidateIncidentCorrelationTopologyCache,
+  startIncidentCorrelationSweep,
+  stopIncidentCorrelationSweep,
+  isDeviceAncestor,
+  computeCorrelationGroupId,
+  partitionManualIncidents,
+  incidentDeviceMatches
+};

@@ -110,6 +110,97 @@ export default function incidentRoutes(io) {
     }
   });
 
+  router.post("/:incidentId/merge", async (req, res) => {
+    try {
+      const { intoIncidentId } = req.body;
+      if (!intoIncidentId) return res.status(400).json({ success: false, message: "intoIncidentId is required." });
+      if (intoIncidentId === req.params.incidentId) return res.status(400).json({ success: false, message: "Cannot merge an incident into itself." });
+
+      const [source, target] = await Promise.all([
+        Incident.findOne({ incidentId: req.params.incidentId }),
+        Incident.findOne({ incidentId: intoIncidentId })
+      ]);
+      if (!source || !target) return res.status(404).json({ success: false, message: "Incident not found." });
+      if (source.status === "RESOLVED" || target.status === "RESOLVED") {
+        return res.status(409).json({ success: false, code: "CANNOT_MERGE_RESOLVED_INCIDENT", message: "Resolved incidents cannot be merged." });
+      }
+      if (target.correlationRole === "CHILD" && target.parentIncidentId) {
+        return res.status(409).json({ success: false, code: "TARGET_NOT_A_ROOT", message: `${target.incidentId} is already part of group ${target.correlationGroupId} under root ${target.parentIncidentId}. Merge into ${target.parentIncidentId} instead.` });
+      }
+      if (source.correlationGroupId && source.correlationGroupId === target.correlationGroupId) {
+        return res.status(409).json({ success: false, code: "ALREADY_IN_GROUP", message: "These incidents are already in the same correlation group." });
+      }
+
+      const groupId = target.correlationGroupId || `COR-${target.incidentId}`;
+
+      // If the source is itself a root with existing children, cascade them
+      // into the new group too rather than leaving them orphaned.
+      const cascaded = source.correlationRole === "ROOT" && source.correlationGroupId
+        ? await Incident.find({ correlationGroupId: source.correlationGroupId, correlationRole: "CHILD" })
+        : [];
+
+      target.correlationGroupId = groupId;
+      target.correlationRole = "ROOT";
+      target.parentIncidentId = null;
+      target.correlationManual = true;
+      await target.save();
+
+      source.correlationGroupId = groupId;
+      source.correlationRole = "CHILD";
+      source.parentIncidentId = target.incidentId;
+      source.correlationConfidence = 100;
+      source.correlationEvidence = ["Manually merged by a NOC engineer."];
+      source.correlationManual = true;
+      await source.save();
+
+      for (const child of cascaded) {
+        child.correlationGroupId = groupId;
+        child.parentIncidentId = target.incidentId;
+        child.correlationManual = true;
+        await child.save();
+        if (io) io.emit("incident_updated", child);
+      }
+
+      if (io) { io.emit("incident_updated", target); io.emit("incident_updated", source); }
+
+      const correlation = await correlateActiveIncidents();
+      if (io) io.emit("incident_correlation_updated", correlation);
+      return res.json({ success: true, target: target.toObject(), source: source.toObject(), correlation });
+    } catch (error) {
+      console.error("MERGE INCIDENT ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to merge incidents.", error: error.message });
+    }
+  });
+
+  router.post("/:incidentId/unmerge", async (req, res) => {
+    try {
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+      if (incident.status === "RESOLVED") {
+        return res.status(409).json({ success: false, code: "CANNOT_UNMERGE_RESOLVED_INCIDENT", message: "Resolved incidents cannot be unmerged." });
+      }
+      if (incident.correlationRole !== "CHILD") {
+        return res.status(400).json({ success: false, message: "Only a correlated child incident can be unmerged. To dissolve a whole group, unmerge each child individually." });
+      }
+
+      incident.correlationGroupId = null;
+      incident.correlationRole = "STANDALONE";
+      incident.parentIncidentId = null;
+      incident.correlationConfidence = null;
+      incident.correlationEvidence = [];
+      incident.correlationManual = true;
+      await incident.save();
+      if (io) io.emit("incident_updated", incident);
+
+      const correlation = await correlateActiveIncidents();
+      if (io) io.emit("incident_correlation_updated", correlation);
+      return res.json({ success: true, incident: incident.toObject(), correlation });
+    } catch (error) {
+      console.error("UNMERGE INCIDENT ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to unmerge incident.", error: error.message });
+    }
+  });
+
   router.get("/:incidentId", async (req, res) => {
     try {
       const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean().exec();
