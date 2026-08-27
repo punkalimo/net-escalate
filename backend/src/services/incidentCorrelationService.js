@@ -2,6 +2,7 @@ import Incident from "../models/Incident.js";
 import Device from "../models/Device.js";
 import { discoverTopology } from "./topologyService.js";
 import { computeRootCause } from "./rootCauseService.js";
+import { mergeDownstream, computeBlastRadius } from "./blastRadiusService.js";
 
 const MAX_CORRELATION_HOPS = 3;
 const ACTIVE_STATUSES = new Set(["OPEN", "CALLING", "ACKNOWLEDGED", "ESCALATING", "FAILED"]);
@@ -142,11 +143,17 @@ async function resetStandaloneIfNeeded(incident) {
 // automatically-discovered groups.
 function buildManualGroups(incidents, devices = []) {
   const groups = [];
+  const deviceById = new Map(devices.map(device => [device.deviceId, device]));
   const roots = incidents.filter(incident => incident.correlationManual && incident.correlationRole === "ROOT" && incident.correlationGroupId);
   for (const root of roots) {
     const children = incidents.filter(incident => incident.correlationRole === "CHILD" && incident.correlationGroupId === root.correlationGroupId);
     if (!children.length) continue;
     const rootDevice = devices.find(device => incidentDeviceMatches(root, device)) || null;
+    const childRefs = children.map(child => {
+      const childDevice = devices.find(device => incidentDeviceMatches(child, device)) || null;
+      return { deviceId: childDevice?.deviceId || null, hostname: childDevice?.hostname || child.device, interfaceName: child.interfaceName, createdAt: child.createdAt };
+    });
+    const downstream = mergeDownstream(childRefs, root.impactedDevices);
     groups.push({
       correlationGroupId: root.correlationGroupId,
       rootIncidentId: root.incidentId,
@@ -155,7 +162,8 @@ function buildManualGroups(incidents, devices = []) {
       manual: true,
       children: children.map(child => ({ incidentId: child.incidentId, device: child.device, hops: null, confidence: child.correlationConfidence ?? null, evidence: child.correlationEvidence || [], path: [] })),
       blastRadius: children.length,
-      rootCause: computeRootCause(root, { device: rootDevice, children: children.map(child => ({ hostname: child.device, interfaceName: child.interfaceName, createdAt: child.createdAt })) })
+      rootCause: computeRootCause(root, { device: rootDevice, children: childRefs }),
+      blastRadiusDetail: computeBlastRadius(root, { rootDevice, downstream, deviceById })
     });
   }
   return groups;
@@ -243,6 +251,8 @@ async function runCorrelation({ forceTopology = false } = {}) {
       });
     }
 
+    const childRefs = children.map(relation => ({ deviceId: relation.childDevice?.deviceId || null, hostname: relation.childDevice?.hostname || relation.child.device, interfaceName: relation.child.interfaceName, createdAt: relation.child.createdAt }));
+    const downstream = mergeDownstream(childRefs, root.impactedDevices);
     groups.push({
       correlationGroupId,
       rootIncidentId: root.incidentId,
@@ -250,7 +260,8 @@ async function runCorrelation({ forceTopology = false } = {}) {
       rootSeverity: root.severity,
       children: groupChildren,
       blastRadius: groupChildren.length,
-      rootCause: computeRootCause(root, { device: rootDevice, children: children.map(relation => ({ hostname: relation.childDevice?.hostname || relation.child.device, interfaceName: relation.child.interfaceName, createdAt: relation.child.createdAt })) })
+      rootCause: computeRootCause(root, { device: rootDevice, children: childRefs }),
+      blastRadiusDetail: computeBlastRadius(root, { rootDevice, downstream, deviceById })
     });
   }
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
 import { Activity, AlertTriangle, CheckCircle2, Clock3, GitMerge, Network, Phone, Radio, RefreshCw, Server, ShieldAlert, Unlink, UserRound, X, Zap } from "lucide-react";
-import { getIncident, getIncidentRootCause, getIncidents, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
+import { getIncident, getIncidentBlastRadius, getIncidentRootCause, getIncidents, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
@@ -107,6 +107,24 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
   };
 
   useEffect(() => { loadRootCause(); }, [incident?.incidentId, incident?.correlationRole, incident?.correlationGroupId]);
+
+  const [blastRadius, setBlastRadius] = useState(null);
+  const [blastRadiusLoading, setBlastRadiusLoading] = useState(true);
+
+  const loadBlastRadius = async () => {
+    if (!incident?.incidentId) return;
+    setBlastRadiusLoading(true);
+    try {
+      const result = await getIncidentBlastRadius(incident.incidentId);
+      if (result.success) setBlastRadius(result.blastRadius);
+    } catch (e) {
+      // Non-fatal - the rest of the incident page still works without it.
+    } finally {
+      setBlastRadiusLoading(false);
+    }
+  };
+
+  useEffect(() => { loadBlastRadius(); }, [incident?.incidentId, incident?.correlationRole, incident?.correlationGroupId, incident?.impactedDevices?.length]);
 
   async function openMergePicker() {
     setMergePickerOpen(true);
@@ -218,6 +236,20 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                 </> : <p className="mt-3 text-sm text-slate-500">No root-cause analysis available yet.</p>}
               </section>
 
+              <section className="rounded-2xl border border-amber-500/20 bg-amber-500/[0.04] p-5 sm:p-6">
+                <div className="flex items-center gap-2"><Network size={18} className="text-amber-400" /><span className="text-xs font-semibold uppercase tracking-[.16em] text-slate-500">Blast radius</span></div>
+                {blastRadiusLoading && !blastRadius ? <p className="mt-3 text-sm text-slate-500">Calculating blast radius…</p> : blastRadius ? <>
+                  {blastRadius.chain?.length > 0 && <div className="mt-4 flex flex-wrap items-center gap-2">{blastRadius.chain.map((step, i) => <div key={i} className="flex items-center gap-2">{i > 0 && <span className="text-slate-700">→</span>}<div className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2"><p className="text-[9px] uppercase tracking-wider text-slate-600">{step.tier}</p><p className="mt-0.5 text-xs font-semibold text-slate-200">{step.label || `${step.count} device${step.count === 1 ? "" : "s"}`}</p></div></div>)}</div>}
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-600">Affected devices</p><p className="mt-1 text-lg font-bold text-white">{blastRadius.affectedDeviceCount}</p></div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-600">Affected interfaces</p><p className="mt-1 text-lg font-bold text-white">{blastRadius.affectedInterfaceCount}</p></div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-600">Sites affected</p><p className="mt-1 text-lg font-bold text-white">{blastRadius.sitesAffected.length || "—"}</p></div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-600">Upstream device</p><p className="mt-1 truncate text-sm text-slate-300">{blastRadius.upstreamDevice?.hostname || "None known"}</p></div>
+                  </div>
+                  {blastRadius.servicesPotentiallyAffected?.length > 0 && <p className="mt-3 text-xs text-slate-500">Potentially affected downstream: {blastRadius.servicesPotentiallyAffected.join(", ")}</p>}
+                </> : <p className="mt-3 text-sm text-slate-500">No downstream impact detected.</p>}
+              </section>
+
               <section className="grid gap-4 md:grid-cols-3">
                 <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-5"><div className="flex items-center gap-2 text-blue-400"><Radio size={16} /><span className="text-[10px] font-bold uppercase tracking-wider">Escalation level</span></div><p className="mt-2 text-3xl font-bold text-white">L{currentStage}<span className="text-sm font-normal text-slate-600"> / 3</span></p></div>
                 <div className="rounded-xl border border-purple-500/20 bg-purple-500/5 p-5"><div className="flex items-center gap-2 text-purple-400"><Phone size={16} /><span className="text-[10px] font-bold uppercase tracking-wider">Current technician</span></div><p className="mt-2 truncate text-sm font-semibold text-white">{incident?.technician?.name || "Unassigned"}</p><p className="mt-1 font-mono text-[11px] text-slate-500">{incident?.technician?.phone || "—"}</p></div>
@@ -231,13 +263,15 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                 </section>
 
                 <aside className="space-y-6">
-                  {incident?.impactedDevices?.length > 0 && <section className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
-                    <div className="flex items-center gap-2"><Server size={16} className="text-amber-400" /><h3 className="font-semibold text-white">Impacted devices ({incident.impactedDevices.length})</h3></div>
-                    <p className="mt-1 text-xs text-slate-500">Downstream of {incident.device} in the topology - suppressed here instead of paging separately.</p>
-                    <div className="mt-4 space-y-2">{incident.impactedDevices.map(d => <div key={d.deviceId} className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2">
-                      <div className="min-w-0"><p className="truncate text-sm font-medium text-slate-300">{d.hostname}</p><p className="text-[10px] text-slate-600">Attached {formatTime(d.attachedAt)}</p></div>
-                      <Pill className={d.status === "DOWN" ? "border-red-500/30 bg-red-500/10 text-red-400" : "border-slate-700 bg-slate-800 text-slate-400"}>{d.status || "UNKNOWN"}</Pill>
-                    </div>)}</div>
+                  {(blastRadius?.downstreamDevices?.length > 0 || incident?.impactedDevices?.length > 0) && <section className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
+                    {(() => { const list = blastRadius?.downstreamDevices?.length ? blastRadius.downstreamDevices : incident.impactedDevices.map(d => ({ deviceId: d.deviceId, hostname: d.hostname, status: d.status, interfaceName: null })); return <>
+                      <div className="flex items-center gap-2"><Server size={16} className="text-amber-400" /><h3 className="font-semibold text-white">Downstream devices ({list.length})</h3></div>
+                      <p className="mt-1 text-xs text-slate-500">Part of this incident's blast radius - explained by {incident.device}, not paged separately.</p>
+                      <div className="mt-4 space-y-2">{list.map(d => <div key={d.deviceId || d.hostname} className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2">
+                        <div className="min-w-0"><p className="truncate text-sm font-medium text-slate-300">{d.hostname}</p>{d.interfaceName && <p className="text-[10px] text-slate-600">{d.interfaceName}</p>}</div>
+                        <Pill className={d.status === "DOWN" ? "border-red-500/30 bg-red-500/10 text-red-400" : "border-slate-700 bg-slate-800 text-slate-400"}>{d.status || "UNKNOWN"}</Pill>
+                      </div>)}</div>
+                    </>; })()}
                   </section>}
                   <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
                     <div className="flex items-center gap-2"><Network size={16} className="text-purple-400" /><h3 className="font-semibold text-white">Correlation</h3></div>

@@ -4,6 +4,7 @@ import Device from "../models/Device.js";
 import { processIncident } from "../services/incidentService.js";
 import { correlateActiveIncidents, incidentDeviceMatches } from "../services/incidentCorrelationService.js";
 import { computeRootCause } from "../services/rootCauseService.js";
+import { mergeDownstream, computeBlastRadius } from "../services/blastRadiusService.js";
 
 async function generateUniqueIncidentId() {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -221,6 +222,32 @@ export default function incidentRoutes(io) {
     } catch (error) {
       console.error("INCIDENT ROOT CAUSE ERROR:", error);
       return res.status(500).json({ success: false, message: "Failed to compute root cause.", error: error.message });
+    }
+  });
+
+  router.get("/:incidentId/blast-radius", async (req, res) => {
+    try {
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+
+      const devices = await Device.find({}).lean();
+      const deviceById = new Map(devices.map(d => [d.deviceId, d]));
+      const rootDevice = devices.find(d => incidentDeviceMatches(incident, d)) || null;
+
+      let childRefs = [];
+      if (incident.correlationRole === "ROOT" && incident.correlationGroupId) {
+        const childDocs = await Incident.find({ correlationGroupId: incident.correlationGroupId, correlationRole: "CHILD" }).select("device interfaceName createdAt").lean();
+        childRefs = childDocs.map(child => {
+          const childDevice = devices.find(d => incidentDeviceMatches(child, d)) || null;
+          return { deviceId: childDevice?.deviceId || null, hostname: childDevice?.hostname || child.device, interfaceName: child.interfaceName, createdAt: child.createdAt };
+        });
+      }
+
+      const downstream = mergeDownstream(childRefs, incident.impactedDevices);
+      return res.json({ success: true, blastRadius: computeBlastRadius(incident, { rootDevice, downstream, deviceById }) });
+    } catch (error) {
+      console.error("INCIDENT BLAST RADIUS ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to compute blast radius.", error: error.message });
     }
   });
 
