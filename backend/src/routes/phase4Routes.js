@@ -5,20 +5,11 @@ import Incident from "../models/Incident.js";
 import InterfaceSample from "../models/InterfaceSample.js";
 import ConfigSnapshot from "../models/ConfigSnapshot.js";
 import { correlateActiveIncidents } from "../services/incidentCorrelationService.js";
+import { computeRootCause } from "../services/rootCauseService.js";
 import { discoverTopology } from "../services/topologyService.js";
 import { discoverInterfaces } from "../services/snmpService.js";
 
 function fingerprint(value) { return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
-
-function classifyCause(incident, device, group) {
-  const text = `${incident?.description || ""} ${device?.lastError || ""}`.toLowerCase();
-  if (incident?.interfaceName || incident?.source === "INTERFACE_HEALTH") return { cause: "Interface degradation or outage", confidence: 92, evidence: ["Interface health signal", "Interface-level incident source"] };
-  if (device?.status === "DOWN") return { cause: "Device reachability failure", confidence: 88, evidence: ["Device status is DOWN", "Active monitoring fault"] };
-  if (text.includes("timeout") || text.includes("timed out")) return { cause: "Connectivity or latency failure", confidence: 82, evidence: ["Timeout detected", "Reachability probe failure"] };
-  if (text.includes("error") || text.includes("discard")) return { cause: "Packet/error condition", confidence: 74, evidence: ["Error/discard signal in incident"] };
-  if (group?.children?.length) return { cause: "Topology-correlated upstream fault", confidence: 70, evidence: [`${group.children.length} downstream incident(s) share a topology path`, "Incident timing and device relationship support the hypothesis"] };
-  return { cause: "Insufficient evidence", confidence: 45, evidence: ["No dominant failure signal detected"] };
-}
 
 async function captureSnapshot(device) {
   const config = { hostname: device.hostname, ipAddress: device.ipAddress, deviceType: device.deviceType, vendor: device.vendor, model: device.model, interfaces: device.interfaces, monitoringMethods: device.monitoringMethods, monitoredPorts: device.monitoredPorts, snmp: { enabled: device.snmp?.enabled, version: device.snmp?.version } };
@@ -65,9 +56,18 @@ export default function phase4Routes(io) {
           return target && values.some(v => v === target || v.includes(target) || target.includes(v));
         });
         const group = incident.correlationRole === "CHILD" ? groups.find(g => g.children.some(child => child.incidentId === incident.incidentId)) : groupMap.get(incident.incidentId);
-        const analysis = classifyCause(incident, device, group);
+        // A root's rootCause is already computed (with its correlated children factored
+        // in) by the correlation engine - reuse it instead of recomputing. Everything
+        // else (children, standalone) gets its own single-incident analysis.
+        const rootCause = incident.correlationRole === "ROOT" && group?.rootCause ? group.rootCause : computeRootCause(incident, { device, children: [] });
         const pathEvidence = group?.children?.find(child => child.incidentId === incident.incidentId)?.path || [];
-        return { incidentId: incident.incidentId, device: incident.device, severity: incident.severity, status: incident.status, role: incident.correlationRole || "STANDALONE", correlationGroupId: incident.correlationGroupId || null, parentIncidentId: incident.parentIncidentId || null, blastRadius: group?.blastRadius ? group.blastRadius + 1 : 1, topologyPath: pathEvidence, ...analysis, nextAction: incident.correlationRole === "ROOT" ? "Validate the root-device fault first, then inspect the listed downstream symptoms." : incident.correlationRole === "CHILD" ? "Treat this as a correlated symptom until the parent/root incident is cleared." : analysis.confidence >= 80 ? "Validate the indicated fault and inspect interface/path evidence." : "Collect interface, path and device evidence before escalating." };
+        return {
+          incidentId: incident.incidentId, device: incident.device, severity: incident.severity, status: incident.status,
+          role: incident.correlationRole || "STANDALONE", correlationGroupId: incident.correlationGroupId || null, parentIncidentId: incident.parentIncidentId || null,
+          blastRadius: group?.blastRadius ? group.blastRadius + 1 : 1, topologyPath: pathEvidence,
+          rootCause, cause: rootCause.description, confidence: rootCause.confidence, evidence: rootCause.evidence,
+          nextAction: incident.correlationRole === "ROOT" ? "Validate the root-device fault first, then inspect the listed downstream symptoms." : incident.correlationRole === "CHILD" ? "Treat this as a correlated symptom until the parent/root incident is cleared." : rootCause.confidence >= 80 ? "Validate the indicated fault and inspect interface/path evidence." : "Collect interface, path and device evidence before escalating."
+        };
       });
       return res.json({ success: true, generatedAt: new Date().toISOString(), topologyGeneratedAt: correlation.topologyGeneratedAt || null, activeIncidents: correlation.activeIncidents || incidents.length, correlatedGroups: correlation.correlatedGroups || groups.length, suppressedChildren: correlation.suppressedChildren || 0, groups, analyses, devices: devices.map(d => ({ deviceId: d.deviceId, hostname: d.hostname, status: d.status })) });
     } catch (error) { console.error("PHASE4 RCA ERROR:", error); return res.status(500).json({ success: false, message: "Failed to build topology-aware RCA analysis.", error: error.message }); }

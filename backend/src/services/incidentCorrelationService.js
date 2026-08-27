@@ -1,6 +1,7 @@
 import Incident from "../models/Incident.js";
 import Device from "../models/Device.js";
 import { discoverTopology } from "./topologyService.js";
+import { computeRootCause } from "./rootCauseService.js";
 
 const MAX_CORRELATION_HOPS = 3;
 const ACTIVE_STATUSES = new Set(["OPEN", "CALLING", "ACKNOWLEDGED", "ESCALATING", "FAILED"]);
@@ -139,12 +140,13 @@ async function resetStandaloneIfNeeded(incident) {
 // surface them, just read them back into the same `groups` shape the UI
 // expects so RootCauseCenter/IncidentDetails render them alongside
 // automatically-discovered groups.
-function buildManualGroups(incidents) {
+function buildManualGroups(incidents, devices = []) {
   const groups = [];
   const roots = incidents.filter(incident => incident.correlationManual && incident.correlationRole === "ROOT" && incident.correlationGroupId);
   for (const root of roots) {
     const children = incidents.filter(incident => incident.correlationRole === "CHILD" && incident.correlationGroupId === root.correlationGroupId);
     if (!children.length) continue;
+    const rootDevice = devices.find(device => incidentDeviceMatches(root, device)) || null;
     groups.push({
       correlationGroupId: root.correlationGroupId,
       rootIncidentId: root.incidentId,
@@ -152,7 +154,8 @@ function buildManualGroups(incidents) {
       rootSeverity: root.severity,
       manual: true,
       children: children.map(child => ({ incidentId: child.incidentId, device: child.device, hops: null, confidence: child.correlationConfidence ?? null, evidence: child.correlationEvidence || [], path: [] })),
-      blastRadius: children.length
+      blastRadius: children.length,
+      rootCause: computeRootCause(root, { device: rootDevice, children: children.map(child => ({ hostname: child.device, interfaceName: child.interfaceName, createdAt: child.createdAt })) })
     });
   }
   return groups;
@@ -167,7 +170,8 @@ async function runCorrelation({ forceTopology = false } = {}) {
   // browsing the Topology page.
   if (incidents.length < 2) {
     for (const incident of incidents) await resetStandaloneIfNeeded(incident);
-    const manualGroups = buildManualGroups(incidents);
+    const devices = incidents.length ? await Device.find({}).lean().exec() : [];
+    const manualGroups = buildManualGroups(incidents, devices);
     return {
       success: true, generatedAt: new Date().toISOString(), topologyGeneratedAt: null,
       activeIncidents: incidents.length, correlatedGroups: manualGroups.length,
@@ -245,7 +249,8 @@ async function runCorrelation({ forceTopology = false } = {}) {
       rootDevice: root.device,
       rootSeverity: root.severity,
       children: groupChildren,
-      blastRadius: groupChildren.length
+      blastRadius: groupChildren.length,
+      rootCause: computeRootCause(root, { device: rootDevice, children: children.map(relation => ({ hostname: relation.childDevice?.hostname || relation.child.device, interfaceName: relation.child.interfaceName, createdAt: relation.child.createdAt })) })
     });
   }
 
@@ -255,7 +260,7 @@ async function runCorrelation({ forceTopology = false } = {}) {
     await resetStandaloneIfNeeded(incident);
   }
 
-  const allGroups = [...groups, ...buildManualGroups(manualIncidents)];
+  const allGroups = [...groups, ...buildManualGroups(manualIncidents, devices)];
 
   return {
     success: true,

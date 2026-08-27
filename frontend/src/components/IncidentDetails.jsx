@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
 import { Activity, AlertTriangle, CheckCircle2, Clock3, GitMerge, Network, Phone, Radio, RefreshCw, Server, ShieldAlert, Unlink, UserRound, X, Zap } from "lucide-react";
-import { getIncident, getIncidents, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
+import { getIncident, getIncidentRootCause, getIncidents, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
@@ -89,6 +89,24 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
   const [mergePickerOpen, setMergePickerOpen] = useState(false);
   const [mergeCandidates, setMergeCandidates] = useState([]);
   const [mergeTargetId, setMergeTargetId] = useState("");
+
+  const [rootCause, setRootCause] = useState(null);
+  const [rootCauseLoading, setRootCauseLoading] = useState(true);
+
+  const loadRootCause = async () => {
+    if (!incident?.incidentId) return;
+    setRootCauseLoading(true);
+    try {
+      const result = await getIncidentRootCause(incident.incidentId);
+      if (result.success) setRootCause(result.rootCause);
+    } catch (e) {
+      // Non-fatal - the rest of the incident page still works without it.
+    } finally {
+      setRootCauseLoading(false);
+    }
+  };
+
+  useEffect(() => { loadRootCause(); }, [incident?.incidentId, incident?.correlationRole, incident?.correlationGroupId]);
 
   async function openMergePicker() {
     setMergePickerOpen(true);
@@ -185,6 +203,19 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                     <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-600">Source</p><p className="mt-1 text-sm text-slate-300">{incident?.source || "MANUAL"}</p></div>
                   </div>
                 </div>
+              </section>
+
+              <section className="rounded-2xl border border-purple-500/20 bg-purple-500/[0.04] p-5 sm:p-6">
+                <div className="flex flex-wrap items-center gap-2"><ShieldAlert size={18} className="text-purple-400" /><span className="text-xs font-semibold uppercase tracking-[.16em] text-slate-500">{rootCause?.label || "Root cause"}</span>{rootCause && <Pill className={rootCause.confidence >= 75 ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" : "border-amber-500/30 bg-amber-500/10 text-amber-400"}>{rootCause.confidence}% root cause confidence</Pill>}</div>
+                {rootCauseLoading && !rootCause ? <p className="mt-3 text-sm text-slate-500">Analyzing probable root cause…</p> : rootCause ? <>
+                  <p className="mt-3 max-w-4xl text-sm leading-relaxed text-slate-300">{rootCause.description}</p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-600">Root device</p><p className="mt-1 truncate text-sm text-slate-300">{rootCause.device || "—"}</p></div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-600">Root interface</p><p className="mt-1 text-sm text-slate-300">{rootCause.interfaceName || "—"}</p></div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-600">Affected devices</p><p className="mt-1 text-sm text-slate-300">{rootCause.affectedDeviceCount}</p></div>
+                  </div>
+                  {rootCause.evidence?.length > 0 && <div className="mt-4 space-y-1">{rootCause.evidence.map((e, i) => <p key={i} className="text-xs leading-5 text-slate-500">• {e}</p>)}</div>}
+                </> : <p className="mt-3 text-sm text-slate-500">No root-cause analysis available yet.</p>}
               </section>
 
               <section className="grid gap-4 md:grid-cols-3">

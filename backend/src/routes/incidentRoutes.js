@@ -1,7 +1,9 @@
 import express from "express";
 import Incident from "../models/Incident.js";
+import Device from "../models/Device.js";
 import { processIncident } from "../services/incidentService.js";
-import { correlateActiveIncidents } from "../services/incidentCorrelationService.js";
+import { correlateActiveIncidents, incidentDeviceMatches } from "../services/incidentCorrelationService.js";
+import { computeRootCause } from "../services/rootCauseService.js";
 
 async function generateUniqueIncidentId() {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -198,6 +200,27 @@ export default function incidentRoutes(io) {
     } catch (error) {
       console.error("UNMERGE INCIDENT ERROR:", error);
       return res.status(500).json({ success: false, message: "Failed to unmerge incident.", error: error.message });
+    }
+  });
+
+  router.get("/:incidentId/root-cause", async (req, res) => {
+    try {
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+
+      const devices = await Device.find({}).lean();
+      const device = devices.find(d => incidentDeviceMatches(incident, d)) || null;
+
+      let children = [];
+      if (incident.correlationRole === "ROOT" && incident.correlationGroupId) {
+        const childDocs = await Incident.find({ correlationGroupId: incident.correlationGroupId, correlationRole: "CHILD" }).select("device interfaceName createdAt").lean();
+        children = childDocs.map(child => ({ hostname: child.device, interfaceName: child.interfaceName, createdAt: child.createdAt }));
+      }
+
+      return res.json({ success: true, rootCause: computeRootCause(incident, { device, children }) });
+    } catch (error) {
+      console.error("INCIDENT ROOT CAUSE ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to compute root cause.", error: error.message });
     }
   });
 
