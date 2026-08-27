@@ -2,7 +2,7 @@ import Technician from "../models/Technician.js";
 import { escalateToTechnician } from "./escalationService.js";
 import { pushTimelineEvent } from "./timelineService.js";
 
-const MAX_LEVEL = 3;
+export const MAX_LEVEL = 3;
 
 function emitIncidentUpdate(io, incident) {
   if (io) io.emit("incident_updated", incident);

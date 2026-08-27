@@ -15,6 +15,7 @@ export async function unmergeIncident(incidentId) { return (await api.post(`/inc
 export async function getIncidentRootCause(incidentId) { return (await api.get(`/incidents/${incidentId}/root-cause`)).data; }
 export async function getIncidentBlastRadius(incidentId) { return (await api.get(`/incidents/${incidentId}/blast-radius`)).data; }
 export async function addIncidentComment(incidentId, message, actor) { return (await api.post(`/incidents/${incidentId}/comment`, { message, actor })).data; }
+export async function getIncidentSla(incidentId) { return (await api.get(`/incidents/${incidentId}/sla`)).data; }
 export async function getTechnicians() { return (await api.get("/technicians")).data; }
 export async function createTechnician(technician) { return (await api.post("/technicians", technician)).data; }
 export async function updateTechnician(technicianId, technician) { return (await api.patch(`/technicians/${technicianId}`, technician)).data; }

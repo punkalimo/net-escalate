@@ -6,6 +6,8 @@ import { correlateActiveIncidents, incidentDeviceMatches } from "../services/inc
 import { computeRootCause } from "../services/rootCauseService.js";
 import { mergeDownstream, computeBlastRadius } from "../services/blastRadiusService.js";
 import { buildTimelineEvent, pushTimelineEvent } from "../services/timelineService.js";
+import { computeSlaStatus } from "../services/escalationPolicyService.js";
+import { MAX_LEVEL } from "../services/incidentService.js";
 
 async function generateUniqueIncidentId() {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -227,6 +229,17 @@ export default function incidentRoutes(io) {
     } catch (error) {
       console.error("INCIDENT COMMENT ERROR:", error);
       return res.status(500).json({ success: false, message: "Failed to add comment.", error: error.message });
+    }
+  });
+
+  router.get("/:incidentId/sla", async (req, res) => {
+    try {
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+      return res.json({ success: true, sla: computeSlaStatus(incident, { maxLevel: MAX_LEVEL }) });
+    } catch (error) {
+      console.error("INCIDENT SLA ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to compute SLA status.", error: error.message });
     }
   });
 
