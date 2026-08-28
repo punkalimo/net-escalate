@@ -39,6 +39,7 @@ export default function incidentRoutes(io) {
             description,
             technician,
             source: "MANUAL",
+            severityReasons: ["Manually set by a NOC engineer."],
             timeline: [buildTimelineEvent("INCIDENT_CREATED", "Incident manually created.", { actor: technician?.name || "NOC engineer" })]
           });
         } catch (error) {

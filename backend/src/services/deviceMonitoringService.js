@@ -9,7 +9,8 @@ import Incident from "../models/Incident.js";
 import Technician from "../models/Technician.js";
 
 import { processIncident } from "./incidentService.js";
-import { computeWeightedSeverity } from "./severityService.js";
+import { computeSeverityWithReasons } from "./severityService.js";
+import { buildTimelineEvent } from "./timelineService.js";
 
 const execAsync = promisify(exec);
 
@@ -899,8 +900,8 @@ async function createDeviceIncident(
     const incidentId =
         generateIncidentId();
 
-    const severity =
-        computeWeightedSeverity({
+    const { severity, reasons: severityReasons } =
+        computeSeverityWithReasons({
             baseSeverity: determineIncidentSeverity(
                 device,
                 result
@@ -1000,6 +1001,8 @@ async function createDeviceIncident(
 
             severity,
 
+            severityReasons,
+
             description,
 
             technician:
@@ -1009,7 +1012,23 @@ async function createDeviceIncident(
                 1,
 
             status:
-                "OPEN"
+                "OPEN",
+
+            source:
+                "DEVICE_MONITOR",
+
+            timeline: [
+                buildTimelineEvent(
+                    "ALERT_RECEIVED",
+                    description,
+                    { actor: "monitoring" }
+                ),
+                buildTimelineEvent(
+                    "INCIDENT_CREATED",
+                    `Incident ${incidentId} created for ${device.hostname}.`,
+                    { actor: "system" }
+                )
+            ]
         });
 
     device.activeIncidentId =

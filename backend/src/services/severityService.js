@@ -13,34 +13,55 @@ function rankOf(severity) {
   return SEVERITY_RANK[severity] ?? SEVERITY_RANK.medium;
 }
 
-// Combines three factors into a final severity. Deliberately monotonic
-// (each factor can only raise the rank via Math.max, never lower it) so
-// severity for an active incident only ever escalates, never flaps back
-// down mid-incident - it settles back to whatever the fault itself implies
-// only once the incident is resolved and a fresh one is created.
+// Combines several factors into a final severity, and explains itself while
+// doing it - "do not blindly change severity without clear reasoning."
+// Deliberately monotonic (each factor can only raise the rank, never lower
+// it) so severity for an active incident only ever escalates, never flaps
+// back down mid-incident - it settles back to whatever the fault itself
+// implies only once the incident is resolved and a fresh one is created.
 //
 // - deviceRole: a fault on a core device is floored at "high" even if the
 //   fault type alone would only be "medium" - the same fault matters more
 //   the closer to the core it is. Edge gets a smaller floor; access/host
 //   are not floored at all (the fault's own severity stands).
 // - impactedDeviceCount: a fault currently taking other devices down with
-//   it (see the topology-suppression/impactedDevices work) is worse than
+//   it (topology suppression + correlation-group children) is worse than
 //   the same fault in isolation, regardless of role.
+// - sitesAffected: a fault reaching a second site is a materially bigger
+//   incident than the same blast radius confined to one site.
+// - affectedInterfaceCount: noted in the reasoning for completeness (the
+//   spec's own "number of affected interfaces" factor); it does not floor
+//   severity on its own today - device/site counts are the dominant signal
+//   and interface count mostly tracks device count already.
 // - activeMinutes: anything left open past the configurable escalation
 //   window and not already critical is promoted - an ignored fault is
 //   worse than the same fault five minutes in.
-export function computeWeightedSeverity({ baseSeverity, deviceRole, impactedDeviceCount = 0, activeMinutes = 0, escalationMinutes = DEFAULT_ESCALATION_MINUTES }) {
+export function computeSeverityWithReasons({ baseSeverity, deviceRole, impactedDeviceCount = 0, activeMinutes = 0, escalationMinutes = DEFAULT_ESCALATION_MINUTES, sitesAffected = 0, affectedInterfaceCount = 0 }) {
   let rank = rankOf(baseSeverity);
+  const reasons = [`Base severity from the detected fault: ${baseSeverity}.`];
 
-  if (deviceRole === "core") rank = Math.max(rank, SEVERITY_RANK.high);
-  else if (deviceRole === "edge") rank = Math.max(rank, SEVERITY_RANK.medium);
+  if (deviceRole === "core" && rank < SEVERITY_RANK.high) { rank = SEVERITY_RANK.high; reasons.push("Root device role is core - floored at high."); }
+  else if (deviceRole === "edge" && rank < SEVERITY_RANK.medium) { rank = SEVERITY_RANK.medium; reasons.push("Root device role is edge - floored at medium."); }
 
-  if (impactedDeviceCount >= 5) rank = Math.max(rank, SEVERITY_RANK.critical);
-  else if (impactedDeviceCount >= 1) rank = Math.max(rank, SEVERITY_RANK.high);
+  if (impactedDeviceCount >= 5 && rank < SEVERITY_RANK.critical) { rank = SEVERITY_RANK.critical; reasons.push(`${impactedDeviceCount} downstream devices affected - floored at critical.`); }
+  else if (impactedDeviceCount >= 1 && rank < SEVERITY_RANK.high) { rank = SEVERITY_RANK.high; reasons.push(`${impactedDeviceCount} downstream device(s) affected - floored at high.`); }
+  else if (impactedDeviceCount >= 1) { reasons.push(`${impactedDeviceCount} downstream device(s) affected.`); }
 
-  if (activeMinutes >= escalationMinutes) rank = Math.max(rank, SEVERITY_RANK.critical);
+  if (sitesAffected >= 2 && rank < SEVERITY_RANK.critical) { rank = SEVERITY_RANK.critical; reasons.push(`${sitesAffected} sites impacted - floored at critical.`); }
+  else if (sitesAffected >= 2) { reasons.push(`${sitesAffected} sites impacted.`); }
 
-  return RANK_SEVERITY[Math.min(rank, SEVERITY_RANK.critical)];
+  if (affectedInterfaceCount >= 1) reasons.push(`${affectedInterfaceCount} interface(s) affected.`);
+
+  if (activeMinutes >= escalationMinutes && rank < SEVERITY_RANK.critical) { rank = SEVERITY_RANK.critical; reasons.push(`Active for ${Math.round(activeMinutes)}m, past the ${escalationMinutes}m escalation window - auto-promoted to critical.`); }
+
+  rank = Math.min(rank, SEVERITY_RANK.critical);
+  return { severity: RANK_SEVERITY[rank], reasons };
+}
+
+// Backward-compatible plain-string form for call sites that only need the
+// resulting severity, not the explanation.
+export function computeWeightedSeverity(input) {
+  return computeSeverityWithReasons(input).severity;
 }
 
 let sweepTimer = null;
@@ -52,22 +73,24 @@ let sweepTimer = null;
 // purely with wall-clock time.
 export async function sweepActiveIncidentSeverity() {
   const incidents = await Incident.find({ status: { $in: ACTIVE_INCIDENT_STATUSES } })
-    .select("incidentId deviceId severity impactedDevices createdAt correlationGroupId correlationRole")
+    .select("incidentId deviceId severity impactedDevices createdAt correlationGroupId correlationRole interfaceName")
     .lean();
 
   if (!incidents.length) return { checked: 0, updated: 0 };
 
   const deviceIds = [...new Set(incidents.map(incident => incident.deviceId).filter(Boolean))];
-  const devices = await Device.find({ deviceId: { $in: deviceIds } }).select("deviceId role alertThresholds.severityEscalationMinutes").lean();
+  const devices = await Device.find({ deviceId: { $in: deviceIds } }).select("deviceId role location alertThresholds.severityEscalationMinutes").lean();
   const deviceById = new Map(devices.map(device => [device.deviceId, device]));
 
   // A root incident's correlated children count toward its blast radius too,
   // not just its own impactedDevices - built from the same already-loaded
-  // query, no extra round trip.
-  const childCountByGroup = new Map();
+  // incidents/devices queries, no extra round trip. Every active incident's
+  // own device is already resolvable via deviceById, children included.
+  const childrenByGroup = new Map();
   for (const incident of incidents) {
     if (incident.correlationRole === "CHILD" && incident.correlationGroupId) {
-      childCountByGroup.set(incident.correlationGroupId, (childCountByGroup.get(incident.correlationGroupId) || 0) + 1);
+      if (!childrenByGroup.has(incident.correlationGroupId)) childrenByGroup.set(incident.correlationGroupId, []);
+      childrenByGroup.get(incident.correlationGroupId).push(incident);
     }
   }
 
@@ -78,21 +101,26 @@ export async function sweepActiveIncidentSeverity() {
     const device = incident.deviceId ? deviceById.get(incident.deviceId) : null;
     const escalationMinutes = Number(device?.alertThresholds?.severityEscalationMinutes) || DEFAULT_ESCALATION_MINUTES;
     const activeMinutes = (now - new Date(incident.createdAt).getTime()) / 60000;
-    const correlatedChildren = incident.correlationRole === "ROOT" && incident.correlationGroupId ? (childCountByGroup.get(incident.correlationGroupId) || 0) : 0;
+    const children = incident.correlationRole === "ROOT" && incident.correlationGroupId ? (childrenByGroup.get(incident.correlationGroupId) || []) : [];
 
-    const nextSeverity = computeWeightedSeverity({
+    const sitesAffected = new Set([device?.location, ...children.map(child => (child.deviceId ? deviceById.get(child.deviceId)?.location : null))].filter(Boolean)).size;
+    const affectedInterfaceCount = new Set([incident.interfaceName, ...children.map(child => child.interfaceName)].filter(Boolean)).size;
+
+    const { severity: nextSeverity, reasons } = computeSeverityWithReasons({
       baseSeverity: incident.severity,
       deviceRole: device?.role,
-      impactedDeviceCount: (incident.impactedDevices?.length || 0) + correlatedChildren,
+      impactedDeviceCount: (incident.impactedDevices?.length || 0) + children.length,
       activeMinutes,
-      escalationMinutes
+      escalationMinutes,
+      sitesAffected,
+      affectedInterfaceCount
     });
 
     if (nextSeverity === incident.severity) continue;
 
     const result = await Incident.findOneAndUpdate(
       { incidentId: incident.incidentId, status: { $in: ACTIVE_INCIDENT_STATUSES } },
-      { $set: { severity: nextSeverity }, $push: { timeline: buildTimelineEvent("SEVERITY_CHANGED", `Severity escalated from ${incident.severity} to ${nextSeverity}.`, { actor: "severity engine" }) } },
+      { $set: { severity: nextSeverity, severityReasons: reasons }, $push: { timeline: buildTimelineEvent("SEVERITY_CHANGED", `Severity escalated from ${incident.severity} to ${nextSeverity}. ${reasons[reasons.length - 1]}`, { actor: "severity engine" }) } },
       { new: true }
     );
 
@@ -118,4 +146,4 @@ export function stopSeverityEscalationSweep() {
   sweepTimer = null;
 }
 
-export default { computeWeightedSeverity, sweepActiveIncidentSeverity, startSeverityEscalationSweep, stopSeverityEscalationSweep };
+export default { computeWeightedSeverity, computeSeverityWithReasons, sweepActiveIncidentSeverity, startSeverityEscalationSweep, stopSeverityEscalationSweep };

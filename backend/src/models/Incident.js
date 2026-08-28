@@ -56,6 +56,11 @@ const incidentSchema = new mongoose.Schema(
     device: { type: String, required: true },
     location: { type: String, required: true },
     severity: { type: String, enum: ["low", "medium", "high", "critical"], default: "medium" },
+    // Human-readable factors behind the current severity - "do not blindly
+    // change severity without clear reasoning," per the spec. Set whenever
+    // severity is computed (creation and the severity sweep), not only when
+    // it changes, so every incident always has an explanation to show.
+    severityReasons: { type: [String], default: [] },
     description: { type: String, required: true },
     status: { type: String, enum: ["OPEN", "CALLING", "ACKNOWLEDGED", "ESCALATING", "RESOLVED", "FAILED"], default: "OPEN" },
     technician: {

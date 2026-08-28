@@ -1,6 +1,6 @@
 import Incident from "../models/Incident.js";
 import Technician from "../models/Technician.js";
-import { computeWeightedSeverity } from "./severityService.js";
+import { computeSeverityWithReasons } from "./severityService.js";
 import { buildTimelineEvent } from "./timelineService.js";
 
 // Shared incident lifecycle for any monitored fault condition - interface
@@ -104,7 +104,7 @@ export async function syncFaultIncident({
       return { incidentId: currentIncidentId, latch: false, recovered: false };
     }
 
-    const weightedSeverity = computeWeightedSeverity({ baseSeverity: severity, deviceRole: device.role, impactedDeviceCount: 0, activeMinutes: 0 });
+    const { severity: weightedSeverity, reasons: severityReasons } = computeSeverityWithReasons({ baseSeverity: severity, deviceRole: device.role, impactedDeviceCount: 0, activeMinutes: 0 });
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const incidentId = await generateUniqueIncidentId();
@@ -115,6 +115,7 @@ export async function syncFaultIncident({
           device: deviceLabel,
           location: device.location || "Unknown location",
           severity: weightedSeverity,
+          severityReasons,
           description,
           technician: { id: technician.technicianId, name: technician.name, phone: technician.phone },
           source,
