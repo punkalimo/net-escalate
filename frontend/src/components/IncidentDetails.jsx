@@ -102,6 +102,9 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
   const currentStage = incident?.escalationLevel || 1;
   const live = ["CALLING", "ESCALATING"].includes(incident?.status);
 
+  const [activeTab, setActiveTab] = useState("overview");
+  const TABS = [["overview", "Overview", ShieldAlert], ["timeline", "Timeline & Activity", Clock3], ["escalation", "Escalation", Radio], ["related", "Related & Ask AI", History]];
+
   const [correlationBusy, setCorrelationBusy] = useState(false);
   const [correlationError, setCorrelationError] = useState("");
   const [mergePickerOpen, setMergePickerOpen] = useState(false);
@@ -386,6 +389,9 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                 </div>
               </section>
 
+              <div className="flex gap-1 overflow-x-auto border-b border-slate-800">{TABS.map(([id, label, Icon]) => <button key={id} onClick={() => setActiveTab(id)} className={`flex shrink-0 items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${activeTab === id ? "border-blue-500 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}><Icon size={14} />{label}</button>)}</div>
+
+              <div className={activeTab === "overview" ? "space-y-6" : "hidden"}>
               <section className="rounded-2xl border border-purple-500/20 bg-purple-500/[0.04] p-5 sm:p-6">
                 <div className="flex flex-wrap items-center gap-2"><ShieldAlert size={18} className="text-purple-400" /><span className="text-xs font-semibold uppercase tracking-[.16em] text-slate-500">{rootCause?.label || "Root cause"}</span>{rootCause && <Pill className={rootCause.confidence >= 75 ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" : "border-amber-500/30 bg-amber-500/10 text-amber-400"}>{rootCause.confidence}% root cause confidence</Pill>}</div>
                 {rootCauseLoading && !rootCause ? <p className="mt-3 text-sm text-slate-500">Analyzing probable root cause…</p> : rootCause ? <>
@@ -428,8 +434,30 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                 <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-5"><div className="flex items-center gap-2 text-emerald-400"><Activity size={16} /><span className="text-[10px] font-bold uppercase tracking-wider">Workflow state</span></div><p className="mt-2 text-sm font-semibold text-white">{live ? "Escalation in progress" : incident?.status === "ACKNOWLEDGED" ? "Technician acknowledged" : incident?.status === "RESOLVED" ? "Incident resolved" : incident?.status || "Unknown"}</p></div>
               </section>
 
-              <div className="grid gap-6 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,.7fr)]">
-                <div className="min-w-0 space-y-6">
+              <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
+                <div className="flex items-center gap-2"><Network size={16} className="text-purple-400" /><h3 className="font-semibold text-white">Correlation</h3></div>
+                {correlationError && <p className="mt-3 text-xs text-red-400">{correlationError}</p>}
+                {incident?.correlationRole === "ROOT" && <div className="mt-3"><Pill className="border-red-500/20 bg-red-500/5 text-red-400">Root cause</Pill><p className="mt-2 text-xs leading-5 text-slate-500">Other active incidents are correlated to this one as a probable downstream symptom. See the RCA panel for the full group ({incident.correlationGroupId}).</p></div>}
+                {incident?.correlationRole === "CHILD" && <div className="mt-3">
+                  <Pill className="border-purple-500/20 bg-purple-500/5 text-purple-400">Correlated</Pill>
+                  <p className="mt-2 text-xs leading-5 text-slate-500">Linked as a probable downstream symptom of <span className="font-mono text-slate-300">{incident.parentIncidentId}</span>{incident.correlationConfidence != null && ` · ${incident.correlationConfidence}% confidence`}.</p>
+                  {incident.correlationEvidence?.length > 0 && <div className="mt-2 space-y-1">{incident.correlationEvidence.map((e, i) => <p key={i} className="text-[10px] leading-4 text-slate-600">• {e}</p>)}</div>}
+                  <button onClick={unmerge} disabled={correlationBusy} className="mt-3 flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800 disabled:opacity-50"><Unlink size={13} />{correlationBusy ? "Unmerging…" : "Unmerge from root"}</button>
+                </div>}
+                {(!incident?.correlationRole || incident.correlationRole === "STANDALONE") && <div className="mt-3">
+                  <p className="text-xs leading-5 text-slate-500">No correlation detected for this incident yet.</p>
+                  {!mergePickerOpen ? <button onClick={openMergePicker} className="mt-3 flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800"><GitMerge size={13} />Merge into…</button> : <div className="mt-3 space-y-2">
+                    <select value={mergeTargetId} onChange={e => setMergeTargetId(e.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-2 text-xs text-slate-300">
+                      {mergeCandidates.length === 0 && <option value="">No other active incidents</option>}
+                      {mergeCandidates.map(c => <option key={c.incidentId} value={c.incidentId}>{c.incidentId} · {c.device}</option>)}
+                    </select>
+                    <div className="flex gap-2"><button onClick={merge} disabled={correlationBusy || !mergeTargetId} className="flex-1 rounded-lg bg-purple-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{correlationBusy ? "Merging…" : "Confirm merge"}</button><button onClick={() => setMergePickerOpen(false)} className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-400">Cancel</button></div>
+                  </div>}
+                </div>}
+              </section>
+              </div>
+
+              <div className={activeTab === "timeline" ? "grid gap-6 md:grid-cols-2" : "hidden"}>
                 <section className="min-w-0 rounded-2xl border border-slate-800 bg-slate-900/60">
                   <div className="flex items-center justify-between border-b border-slate-800 p-5"><div><div className="flex items-center gap-2"><Zap size={16} className="text-blue-400" /><h3 className="font-semibold text-white">Real-time escalation activity</h3></div><p className="mt-1 text-xs text-slate-600">Every technician attempt is recorded as the workflow progresses.</p></div><div className="flex items-center gap-2 text-[10px] text-slate-600">{live && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />}Socket live</div></div>
                   {!history.length ? <div className="p-10 text-center"><Clock3 className="mx-auto text-slate-700" /><p className="mt-3 text-sm text-slate-500">Waiting for the first escalation event…</p></div> : <div className="p-5"><div className="relative ml-2 border-l border-slate-800 pl-6">{history.map((entry, index) => <div key={`${entry.level}-${entry.startedAt}-${index}`} className="relative pb-7 last:pb-1"><div className="absolute -left-[31px] top-1 flex h-3 w-3 items-center justify-center rounded-full border-2 border-[#080d16] bg-blue-500" /><div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4"><div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-md bg-slate-800 px-2 py-1 text-[10px] font-bold text-slate-300">LEVEL {entry.level}</span><Pill className={historyStyles[entry.status] || "border-slate-700 bg-slate-800 text-slate-400"}>{entry.status || "UNKNOWN"}</Pill></div><div className="mt-3 flex items-center gap-2"><UserRound size={14} className="text-slate-600" /><span className="text-sm font-semibold text-white">{entry.technicianName || "Unknown technician"}</span><span className="font-mono text-[10px] text-slate-600">{entry.technicianPhone || ""}</span></div></div><div className="text-left sm:text-right"><p className="text-[10px] text-slate-600">Started</p><p className="text-xs text-slate-400">{formatTime(entry.startedAt)}</p><p className="mt-1 text-[10px] text-slate-600">Duration {elapsed(entry.startedAt, entry.completedAt)}</p></div></div>{entry.response && <p className="mt-3 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-xs leading-relaxed text-slate-400">{entry.response}</p>}{(entry.provider || entry.providerCode || entry.callId) && <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-600"><span>Provider: {entry.provider || "—"}</span><span>Call: {entry.callId || "—"}</span><span>Code: {entry.providerCode || "—"}</span></div>}</div></div>)}</div></div>}
@@ -440,9 +468,24 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                   {!timeline.length ? <div className="p-10 text-center"><Clock3 className="mx-auto text-slate-700" /><p className="mt-3 text-sm text-slate-500">No timeline events recorded yet.</p></div> : <div className="p-5"><div className="relative ml-2 border-l border-slate-800 pl-6">{timeline.map((event, index) => <div key={`${event.type}-${event.at}-${index}`} className="relative pb-5 last:pb-1"><div className="absolute -left-[31px] top-1 h-3 w-3 rounded-full border-2 border-[#080d16] bg-slate-600" /><div className="flex flex-wrap items-baseline gap-2"><span className="text-[10px] text-slate-600">{formatTime(event.at)}</span><span className="rounded-md bg-slate-800 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-slate-400">{event.type?.replaceAll("_", " ")}</span>{event.actor && event.actor !== "system" && <span className="text-[10px] text-slate-600">· {event.actor}</span>}</div><p className="mt-1 text-sm text-slate-300">{event.message}</p></div>)}</div></div>}
                   <div className="border-t border-slate-800 p-4"><div className="flex gap-2"><input value={commentDraft} onChange={e => setCommentDraft(e.target.value)} onKeyDown={e => e.key === "Enter" && submitComment()} placeholder="Add a comment…" className="form-input flex-1 text-sm" /><button onClick={submitComment} disabled={commentBusy || !commentDraft.trim()} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{commentBusy ? "Posting…" : "Post"}</button></div></div>
                 </section>
-                </div>
+              </div>
 
-                <aside className="space-y-6">
+              <div className={activeTab === "escalation" ? "max-w-2xl space-y-6" : "hidden"}>
+                  <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5"><div className="flex items-center gap-2"><Radio size={16} className="text-blue-400" /><h3 className="font-semibold text-white">Escalation command</h3></div>
+                  {sla && <div className={`mt-4 rounded-xl border p-3 ${slaOverdue ? "border-red-500/20 bg-red-500/5" : "border-amber-500/20 bg-amber-500/5"}`}>
+                    <p className="text-[10px] uppercase tracking-wider text-slate-600">{sla.phase === "RESOLUTION" ? "Resolution SLA" : "Acknowledgement SLA"} · {sla.policy?.[sla.phase === "RESOLUTION" ? "resolutionTimeoutMinutes" : "ackTimeoutMinutes"]}m policy</p>
+                    <p className={`mt-1 text-sm font-semibold ${slaOverdue ? "text-red-400" : "text-amber-300"}`}>{slaOverdue ? "Escalation overdue — the engine will advance this shortly." : `${slaMinutesRemaining}m until escalation to Level ${sla.nextLevel}`}</p>
+                  </div>}
+                  <div className="mt-5 space-y-3">{[1,2,3].map(level=>{const activeLevel=currentStage===level;const completed=currentStage>level||incident?.status==="ACKNOWLEDGED"||incident?.status==="RESOLVED";const historyAtLevel=history.find(h=>h.level===level);const teamLabel=historyAtLevel?.technicianRole || `Level ${level}`;const statusLabel=activeLevel&&incident?.status==="ACKNOWLEDGED"?"Acknowledged":activeLevel?"Current escalation stage":completed?"Completed":"Waiting";return <div key={level} className={`flex items-center gap-3 rounded-xl border p-3 ${activeLevel?"border-blue-500/30 bg-blue-500/10":"border-slate-800 bg-slate-950/40"}`}><div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${completed?"bg-emerald-500/15 text-emerald-400":activeLevel?"bg-blue-500/15 text-blue-400":"bg-slate-800 text-slate-600"}`}>{completed?"✓":activeLevel?"●":"○"}</div><div className="min-w-0"><p className="text-xs font-semibold text-slate-300">{teamLabel}</p><p className="text-[10px] text-slate-600">{statusLabel}</p></div>{activeLevel&&<span className="ml-auto h-2 w-2 animate-pulse rounded-full bg-blue-400"/>}</div>})}</div>
+                  <div className="mt-4 flex gap-2">
+                    {incident?.status !== "RESOLVED" && incident?.status !== "ACKNOWLEDGED" && <button onClick={manualAcknowledge} disabled={acknowledgeBusy} className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"><CheckCircle2 size={13} />{acknowledgeBusy ? "Acknowledging…" : "Acknowledge"}</button>}
+                    {incident?.status !== "RESOLVED" && currentStage < 3 && <button onClick={manualEscalate} disabled={escalateBusy} className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-xs font-semibold text-orange-300 hover:bg-orange-500/20 disabled:opacity-50"><ArrowUpCircle size={13} />{escalateBusy ? "Escalating…" : "Escalate now"}</button>}
+                  </div>
+                  </section>
+                  {incident?.acknowledgement && <section className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5"><div className="flex gap-3"><CheckCircle2 className="shrink-0 text-emerald-400" size={18} /><div><p className="text-xs font-semibold text-emerald-300">Technician acknowledgement</p><p className="mt-1 text-sm leading-relaxed text-slate-400">{incident.acknowledgement}</p></div></div></section>}
+              </div>
+
+              <div className={activeTab === "related" ? "grid gap-6 md:grid-cols-2" : "hidden"}>
                   <section className="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-5">
                     <div className="flex items-center gap-2"><Bot size={16} className="text-blue-400" /><h3 className="font-semibold text-white">Ask about this incident</h3></div>
                     <p className="mt-1 text-xs text-slate-500">Answers are read directly from this incident's own data - nothing is invented.</p>
@@ -490,40 +533,6 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                       </div>)}</div>
                     </>; })()}
                   </section>}
-                  <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-                    <div className="flex items-center gap-2"><Network size={16} className="text-purple-400" /><h3 className="font-semibold text-white">Correlation</h3></div>
-                    {correlationError && <p className="mt-3 text-xs text-red-400">{correlationError}</p>}
-                    {incident?.correlationRole === "ROOT" && <div className="mt-3"><Pill className="border-red-500/20 bg-red-500/5 text-red-400">Root cause</Pill><p className="mt-2 text-xs leading-5 text-slate-500">Other active incidents are correlated to this one as a probable downstream symptom. See the RCA panel for the full group ({incident.correlationGroupId}).</p></div>}
-                    {incident?.correlationRole === "CHILD" && <div className="mt-3">
-                      <Pill className="border-purple-500/20 bg-purple-500/5 text-purple-400">Correlated</Pill>
-                      <p className="mt-2 text-xs leading-5 text-slate-500">Linked as a probable downstream symptom of <span className="font-mono text-slate-300">{incident.parentIncidentId}</span>{incident.correlationConfidence != null && ` · ${incident.correlationConfidence}% confidence`}.</p>
-                      {incident.correlationEvidence?.length > 0 && <div className="mt-2 space-y-1">{incident.correlationEvidence.map((e, i) => <p key={i} className="text-[10px] leading-4 text-slate-600">• {e}</p>)}</div>}
-                      <button onClick={unmerge} disabled={correlationBusy} className="mt-3 flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800 disabled:opacity-50"><Unlink size={13} />{correlationBusy ? "Unmerging…" : "Unmerge from root"}</button>
-                    </div>}
-                    {(!incident?.correlationRole || incident.correlationRole === "STANDALONE") && <div className="mt-3">
-                      <p className="text-xs leading-5 text-slate-500">No correlation detected for this incident yet.</p>
-                      {!mergePickerOpen ? <button onClick={openMergePicker} className="mt-3 flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800"><GitMerge size={13} />Merge into…</button> : <div className="mt-3 space-y-2">
-                        <select value={mergeTargetId} onChange={e => setMergeTargetId(e.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-2 text-xs text-slate-300">
-                          {mergeCandidates.length === 0 && <option value="">No other active incidents</option>}
-                          {mergeCandidates.map(c => <option key={c.incidentId} value={c.incidentId}>{c.incidentId} · {c.device}</option>)}
-                        </select>
-                        <div className="flex gap-2"><button onClick={merge} disabled={correlationBusy || !mergeTargetId} className="flex-1 rounded-lg bg-purple-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{correlationBusy ? "Merging…" : "Confirm merge"}</button><button onClick={() => setMergePickerOpen(false)} className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-400">Cancel</button></div>
-                      </div>}
-                    </div>}
-                  </section>
-                  <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5"><div className="flex items-center gap-2"><Radio size={16} className="text-blue-400" /><h3 className="font-semibold text-white">Escalation command</h3></div>
-                  {sla && <div className={`mt-4 rounded-xl border p-3 ${slaOverdue ? "border-red-500/20 bg-red-500/5" : "border-amber-500/20 bg-amber-500/5"}`}>
-                    <p className="text-[10px] uppercase tracking-wider text-slate-600">{sla.phase === "RESOLUTION" ? "Resolution SLA" : "Acknowledgement SLA"} · {sla.policy?.[sla.phase === "RESOLUTION" ? "resolutionTimeoutMinutes" : "ackTimeoutMinutes"]}m policy</p>
-                    <p className={`mt-1 text-sm font-semibold ${slaOverdue ? "text-red-400" : "text-amber-300"}`}>{slaOverdue ? "Escalation overdue — the engine will advance this shortly." : `${slaMinutesRemaining}m until escalation to Level ${sla.nextLevel}`}</p>
-                  </div>}
-                  <div className="mt-5 space-y-3">{[1,2,3].map(level=>{const activeLevel=currentStage===level;const completed=currentStage>level||incident?.status==="ACKNOWLEDGED"||incident?.status==="RESOLVED";const historyAtLevel=history.find(h=>h.level===level);const teamLabel=historyAtLevel?.technicianRole || `Level ${level}`;const statusLabel=activeLevel&&incident?.status==="ACKNOWLEDGED"?"Acknowledged":activeLevel?"Current escalation stage":completed?"Completed":"Waiting";return <div key={level} className={`flex items-center gap-3 rounded-xl border p-3 ${activeLevel?"border-blue-500/30 bg-blue-500/10":"border-slate-800 bg-slate-950/40"}`}><div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${completed?"bg-emerald-500/15 text-emerald-400":activeLevel?"bg-blue-500/15 text-blue-400":"bg-slate-800 text-slate-600"}`}>{completed?"✓":activeLevel?"●":"○"}</div><div className="min-w-0"><p className="text-xs font-semibold text-slate-300">{teamLabel}</p><p className="text-[10px] text-slate-600">{statusLabel}</p></div>{activeLevel&&<span className="ml-auto h-2 w-2 animate-pulse rounded-full bg-blue-400"/>}</div>})}</div>
-                  <div className="mt-4 flex gap-2">
-                    {incident?.status !== "RESOLVED" && incident?.status !== "ACKNOWLEDGED" && <button onClick={manualAcknowledge} disabled={acknowledgeBusy} className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"><CheckCircle2 size={13} />{acknowledgeBusy ? "Acknowledging…" : "Acknowledge"}</button>}
-                    {incident?.status !== "RESOLVED" && currentStage < 3 && <button onClick={manualEscalate} disabled={escalateBusy} className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-xs font-semibold text-orange-300 hover:bg-orange-500/20 disabled:opacity-50"><ArrowUpCircle size={13} />{escalateBusy ? "Escalating…" : "Escalate now"}</button>}
-                  </div>
-                  </section>
-                  {incident?.acknowledgement && <section className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5"><div className="flex gap-3"><CheckCircle2 className="shrink-0 text-emerald-400" size={18} /><div><p className="text-xs font-semibold text-emerald-300">Technician acknowledgement</p><p className="mt-1 text-sm leading-relaxed text-slate-400">{incident.acknowledgement}</p></div></div></section>}
-                </aside>
               </div>
             </div>}
           </div>

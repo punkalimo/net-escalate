@@ -14,18 +14,30 @@ const DEFAULT_MTTR_WINDOW_DAYS = 30;
 // An incident is "approaching" its SLA deadline once less than this
 // fraction of its policy window remains and it isn't overdue yet.
 const APPROACHING_THRESHOLD = 0.25;
+// This is a dashboard aggregate, not a source of truth for any individual
+// incident - unlike the periodic sweeps (severityService.js,
+// escalationSweepService.js, incidentCorrelationService.js), which must see
+// every active incident to be correct, sampling the most recent N here is a
+// legitimate and necessary safety valve: an unbounded scan+per-incident
+// SLA/root-cause computation over an incident count that can spike into the
+// hundreds/thousands during a real incident storm must never be allowed to
+// hang the one endpoint whose entire job is answering "what needs my
+// attention right now" during exactly that kind of storm.
+const SAMPLE_LIMIT = 500;
 
 export function average(values) {
   return values.length ? Math.round(values.reduce((total, value) => total + value, 0) / values.length) : null;
 }
 
-export async function computeIncidentOverview({ mttrWindowDays = DEFAULT_MTTR_WINDOW_DAYS } = {}) {
+export async function computeIncidentOverview({ mttrWindowDays = DEFAULT_MTTR_WINDOW_DAYS, sampleLimit = SAMPLE_LIMIT } = {}) {
   const since = new Date(Date.now() - mttrWindowDays * 24 * 3600 * 1000);
 
-  const [active, recentResolved] = await Promise.all([
-    Incident.find({ status: { $in: ACTIVE_STATUSES } }).lean(),
-    Incident.find({ status: "RESOLVED", resolvedAt: { $gte: since } }).lean()
+  const [activeCount, active, recentResolved] = await Promise.all([
+    Incident.countDocuments({ status: { $in: ACTIVE_STATUSES } }),
+    Incident.find({ status: { $in: ACTIVE_STATUSES } }).sort({ createdAt: -1 }).limit(sampleLimit).lean(),
+    Incident.find({ status: "RESOLVED", resolvedAt: { $gte: since } }).sort({ resolvedAt: -1 }).limit(sampleLimit).lean()
   ]);
+  const sampled = activeCount > active.length;
 
   const critical = active.filter(incident => incident.severity === "critical");
   const unacknowledged = active.filter(incident => incident.status !== "ACKNOWLEDGED");
@@ -69,7 +81,7 @@ export async function computeIncidentOverview({ mttrWindowDays = DEFAULT_MTTR_WI
 
   return {
     generatedAt: new Date().toISOString(),
-    activeIncidents: active.length,
+    activeIncidents: activeCount,
     criticalIncidents: critical.length,
     unacknowledgedIncidents: unacknowledged.length,
     slaBreaches,
@@ -81,7 +93,14 @@ export async function computeIncidentOverview({ mttrWindowDays = DEFAULT_MTTR_WI
     meanTimeToAcknowledgeMinutes: average(ackDurationsMinutes),
     meanTimeToResolveMinutes: average(resolveDurationsMinutes),
     mttrWindowDays,
-    mttrSampleSize: recentResolved.length
+    mttrSampleSize: recentResolved.length,
+    // When true, every per-incident aggregate above (critical/unacknowledged/
+    // slaBreaches/approachingSlaBreach/escalated/devicesAffected/topSites/
+    // topRootCauses) was computed from the sampleLimit most recent active
+    // incidents, not the full activeIncidents count - activeIncidents itself
+    // is always exact (a fast indexed count, not a scan).
+    sampled,
+    sampleSize: active.length
   };
 }
 
