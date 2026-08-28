@@ -5,6 +5,7 @@ const api = axios.create({ baseURL: `${API_URL}/api`, headers: { "Content-Type":
 api.interceptors.response.use(response => response, error => { console.error("API Error:", error.response?.data || error.message); return Promise.reject(error); });
 
 export async function getIncidents() { return (await api.get("/incidents")).data; }
+export async function getIncidentOverview() { return (await api.get("/incidents/overview")).data; }
 export async function getIncident(incidentId) { return (await api.get(`/incidents/${incidentId}`)).data; }
 export async function createIncident(incident) { return (await api.post("/incidents", incident)).data; }
 export async function resolveIncident(incidentId, resolutionNotes) { return (await api.patch(`/incidents/${incidentId}/resolve`, resolutionNotes ? { resolutionNotes } : {})).data; }

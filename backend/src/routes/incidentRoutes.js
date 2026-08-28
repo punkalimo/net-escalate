@@ -11,6 +11,7 @@ import { findPossibleChangeCause } from "../services/changeCorrelationService.js
 import { buildTimelineEvent, pushTimelineEvent } from "../services/timelineService.js";
 import { computeSlaStatus } from "../services/escalationPolicyService.js";
 import { MAX_LEVEL } from "../services/incidentService.js";
+import { computeIncidentOverview } from "../services/dashboardService.js";
 
 async function generateUniqueIncidentId() {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -96,6 +97,15 @@ export default function incidentRoutes(io) {
     } catch (error) {
       console.error("GET INCIDENTS ERROR:", error);
       return res.status(500).json({ success: false, message: "Failed to retrieve incidents.", error: error.message });
+    }
+  });
+
+  router.get("/overview", async (req, res) => {
+    try {
+      return res.json({ success: true, overview: await computeIncidentOverview() });
+    } catch (error) {
+      console.error("INCIDENT OVERVIEW ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to compute incident overview.", error: error.message });
     }
   });
 
