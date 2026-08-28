@@ -117,7 +117,7 @@ export async function syncFaultIncident({
           severity: weightedSeverity,
           severityReasons,
           description,
-          technician: { id: technician.technicianId, name: technician.name, phone: technician.phone },
+          technician: { id: technician.technicianId, name: technician.name, phone: technician.phone, role: technician.role },
           source,
           fingerprint,
           interfaceName,

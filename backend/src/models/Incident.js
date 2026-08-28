@@ -6,6 +6,7 @@ const escalationHistorySchema = new mongoose.Schema(
     technicianId: { type: String, default: null },
     technicianName: { type: String, default: null },
     technicianPhone: { type: String, default: null },
+    technicianRole: { type: String, default: null },
     callId: { type: String, default: null },
     provider: { type: String, default: null },
     providerCode: { type: String, default: null },
@@ -66,7 +67,12 @@ const incidentSchema = new mongoose.Schema(
     technician: {
       id: { type: String, default: null },
       name: { type: String, default: null },
-      phone: { type: String, default: null }
+      phone: { type: String, default: null },
+      // The technician's own role at assignment time (e.g. "Network
+      // Engineer") - the closest honest equivalent this system has to the
+      // spec's "assigned team", since technicians aren't otherwise grouped
+      // into named teams.
+      role: { type: String, default: null }
     },
     escalationLevel: { type: Number, default: 1 },
     calleCallId: { type: String, default: null },

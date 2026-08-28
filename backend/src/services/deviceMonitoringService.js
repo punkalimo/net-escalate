@@ -889,12 +889,16 @@ async function createDeviceIncident(
                     technician.name,
 
                 phone:
-                    technician.phone
+                    technician.phone,
+
+                role:
+                    technician.role
             }
             : {
                 id: null,
                 name: null,
-                phone: null
+                phone: null,
+                role: null
             };
 
     const incidentId =

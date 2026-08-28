@@ -354,6 +354,67 @@ export default function incidentRoutes(io) {
     }
   });
 
+  router.post("/:incidentId/escalate", async (req, res) => {
+    try {
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+      if (incident.status === "RESOLVED") return res.status(409).json({ success: false, message: "Resolved incidents cannot be escalated." });
+      if (incident.escalationLevel >= MAX_LEVEL) return res.status(409).json({ success: false, message: `Already at the highest escalation level (${MAX_LEVEL}).` });
+
+      const nextLevel = incident.escalationLevel + 1;
+      pushTimelineEvent(incident, "ESCALATION_TRIGGERED", `Manually escalated to level ${nextLevel} by a NOC engineer.`, { actor: "NOC engineer" });
+      incident.escalationLevel = nextLevel;
+      incident.status = "ESCALATING";
+      await incident.save();
+      if (io) io.emit("incident_updated", incident);
+
+      processIncident(incident, io).catch(error => console.error(`Manual escalation processing error for ${incident.incidentId}:`, error));
+      return res.json({ success: true, incident: incident.toObject() });
+    } catch (error) {
+      console.error("MANUAL ESCALATION ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to escalate incident.", error: error.message });
+    }
+  });
+
+  router.post("/:incidentId/acknowledge", async (req, res) => {
+    try {
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+      if (incident.status === "RESOLVED") return res.status(409).json({ success: false, message: "Resolved incidents cannot be acknowledged." });
+      if (incident.status === "ACKNOWLEDGED") return res.status(409).json({ success: false, message: "Incident is already acknowledged." });
+
+      const note = String(req.body?.note || "").trim();
+      incident.status = "ACKNOWLEDGED";
+      incident.acknowledgement = note || "Manually acknowledged by a NOC engineer.";
+      pushTimelineEvent(incident, "INCIDENT_ACKNOWLEDGED", note ? `Manually acknowledged by a NOC engineer: ${note}` : "Manually acknowledged by a NOC engineer.", { actor: "NOC engineer" });
+      await incident.save();
+      if (io) io.emit("incident_updated", incident);
+      return res.json({ success: true, incident: incident.toObject() });
+    } catch (error) {
+      console.error("MANUAL ACKNOWLEDGE ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to acknowledge incident.", error: error.message });
+    }
+  });
+
+  router.get("/:incidentId/device-history", async (req, res) => {
+    try {
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+
+      const filter = incident.deviceId ? { deviceId: incident.deviceId } : { device: incident.device };
+      const deviceHistory = await Incident.find({ ...filter, incidentId: { $ne: incident.incidentId } })
+        .sort({ createdAt: -1 })
+        .limit(10)
+        .select("incidentId status severity source description createdAt resolvedAt")
+        .lean();
+
+      return res.json({ success: true, deviceHistory });
+    } catch (error) {
+      console.error("DEVICE HISTORY ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to load device history.", error: error.message });
+    }
+  });
+
   router.patch("/:incidentId/resolve", async (req, res) => {
     try {
       const incident = await Incident.findOne({ incidentId: req.params.incidentId });

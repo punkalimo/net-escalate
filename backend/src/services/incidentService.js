@@ -18,6 +18,7 @@ function addHistoryEntry(incident, technician, level) {
     technicianId: technician.technicianId,
     technicianName: technician.name,
     technicianPhone: technician.phone,
+    technicianRole: technician.role,
     callId: null,
     provider: null,
     providerCode: null,
@@ -62,7 +63,8 @@ export async function processIncident(incident, io) {
       incident.technician = {
         id: technician.technicianId,
         name: technician.name,
-        phone: technician.phone
+        phone: technician.phone,
+        role: technician.role
       };
       incident.escalationLevel = level;
       incident.status = "CALLING";

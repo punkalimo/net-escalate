@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
-import { Activity, AlertTriangle, CheckCircle2, Clock3, GitCommit, GitMerge, History, ListChecks, Network, Phone, Radio, RefreshCw, Server, ShieldAlert, Unlink, UserRound, X, Zap } from "lucide-react";
-import { addIncidentComment, getChangeCorrelation, getIncident, getIncidentBlastRadius, getIncidentRecommendedActions, getIncidentRootCause, getIncidents, getIncidentSla, getSimilarIncidents, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
+import { Activity, AlertTriangle, ArrowUpCircle, CheckCircle2, Clock3, GitCommit, GitMerge, History, ListChecks, Network, Phone, Radio, RefreshCw, Server, ShieldAlert, Unlink, UserRound, X, Zap } from "lucide-react";
+import { acknowledgeIncident, addIncidentComment, escalateIncident, getChangeCorrelation, getDeviceHistory, getIncident, getIncidentBlastRadius, getIncidentRecommendedActions, getIncidentRootCause, getIncidents, getIncidentSla, getSimilarIncidents, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
@@ -199,6 +199,55 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
 
   useEffect(() => { loadChangeCorrelation(); }, [incident?.incidentId]);
 
+  const [deviceHistory, setDeviceHistory] = useState(null);
+  const [deviceHistoryLoading, setDeviceHistoryLoading] = useState(true);
+
+  const loadDeviceHistory = async () => {
+    if (!incident?.incidentId) return;
+    setDeviceHistoryLoading(true);
+    try {
+      const result = await getDeviceHistory(incident.incidentId);
+      if (result.success) setDeviceHistory(result.deviceHistory);
+    } catch (e) {
+      // Non-fatal - the rest of the incident page still works without it.
+    } finally {
+      setDeviceHistoryLoading(false);
+    }
+  };
+
+  useEffect(() => { loadDeviceHistory(); }, [incident?.incidentId]);
+
+  const [escalateBusy, setEscalateBusy] = useState(false);
+  const [acknowledgeBusy, setAcknowledgeBusy] = useState(false);
+
+  async function manualEscalate() {
+    if (!incident?.incidentId) return;
+    setEscalateBusy(true);
+    try {
+      const result = await escalateIncident(incident.incidentId);
+      if (!result.success) throw new Error(result.message || "Failed to escalate incident.");
+      setIncident(result.incident);
+    } catch (e) {
+      setError(e.response?.data?.message || e.message || "Unable to escalate incident.");
+    } finally {
+      setEscalateBusy(false);
+    }
+  }
+
+  async function manualAcknowledge() {
+    if (!incident?.incidentId) return;
+    setAcknowledgeBusy(true);
+    try {
+      const result = await acknowledgeIncident(incident.incidentId);
+      if (!result.success) throw new Error(result.message || "Failed to acknowledge incident.");
+      setIncident(result.incident);
+    } catch (e) {
+      setError(e.response?.data?.message || e.message || "Unable to acknowledge incident.");
+    } finally {
+      setAcknowledgeBusy(false);
+    }
+  }
+
   const [sla, setSla] = useState(null);
   const [now, setNow] = useState(() => Date.now());
 
@@ -287,6 +336,7 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                 <button onClick={onClose} className="mr-1 rounded-lg border border-slate-800 p-2 text-slate-500 hover:bg-slate-800 hover:text-white" title="Back to incidents"><X size={17} /></button>
                 <span className="font-mono text-sm font-bold text-white">{incident?.incidentId || initialIncident?.incidentId}</span>
                 <Pill className={statusStyles[incident?.status] || statusStyles.OPEN}>{incident?.status || "LOADING"}</Pill>
+                {incident?.createdAt && <Pill className="border-slate-700 bg-slate-800 text-slate-400">{incident.status === "RESOLVED" ? `Resolved after ${elapsed(incident.createdAt, incident.resolvedAt)}` : `Open ${elapsed(incident.createdAt, now)}`}</Pill>}
                 {live && <Pill className="border-emerald-500/20 bg-emerald-500/10 text-emerald-400"><span className="mr-1.5 h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />Live escalation</Pill>}
               </div>
               <p className="mt-1 pl-11 text-xs text-slate-500">Incident command · real-time escalation and response monitoring</p>
@@ -332,7 +382,7 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
               <section className="rounded-2xl border border-amber-500/20 bg-amber-500/[0.04] p-5 sm:p-6">
                 <div className="flex items-center gap-2"><Network size={18} className="text-amber-400" /><span className="text-xs font-semibold uppercase tracking-[.16em] text-slate-500">Blast radius</span></div>
                 {blastRadiusLoading && !blastRadius ? <p className="mt-3 text-sm text-slate-500">Calculating blast radius…</p> : blastRadius ? <>
-                  {blastRadius.chain?.length > 0 && <div className="mt-4 flex flex-wrap items-center gap-2">{blastRadius.chain.map((step, i) => <div key={i} className="flex items-center gap-2">{i > 0 && <span className="text-slate-700">→</span>}<div className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2"><p className="text-[9px] uppercase tracking-wider text-slate-600">{step.tier}</p><p className="mt-0.5 text-xs font-semibold text-slate-200">{step.label || `${step.count} device${step.count === 1 ? "" : "s"}`}</p></div></div>)}</div>}
+                  {blastRadius.chain?.length > 0 && <div className="mt-4 flex flex-wrap items-start gap-2">{blastRadius.chain.map((step, i) => { const tierRole = { CORE: "core", DISTRIBUTION: "edge", ACCESS: "access", ENDPOINTS: "host" }[step.tier]; const members = tierRole ? (blastRadius.downstreamDevices || []).filter(d => d.role === tierRole) : []; return <div key={i} className="flex items-start gap-2">{i > 0 && <span className="mt-3 text-slate-700">→</span>}<div className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2"><p className="text-[9px] uppercase tracking-wider text-slate-600">{step.tier}</p><p className="mt-0.5 text-xs font-semibold text-slate-200">{step.label || `${step.count} device${step.count === 1 ? "" : "s"}`}</p>{members.length > 0 && <p className="mt-1 max-w-[160px] text-[10px] leading-4 text-slate-500">{members.slice(0, 3).map(m => m.hostname).join(", ")}{members.length > 3 ? ` +${members.length - 3} more` : ""}</p>}</div></div>; })}</div>}
                   <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-600">Affected devices</p><p className="mt-1 text-lg font-bold text-white">{blastRadius.affectedDeviceCount}</p></div>
                     <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-600">Affected interfaces</p><p className="mt-1 text-lg font-bold text-white">{blastRadius.affectedInterfaceCount}</p></div>
@@ -354,7 +404,7 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
 
               <section className="grid gap-4 md:grid-cols-3">
                 <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-5"><div className="flex items-center gap-2 text-blue-400"><Radio size={16} /><span className="text-[10px] font-bold uppercase tracking-wider">Escalation level</span></div><p className="mt-2 text-3xl font-bold text-white">L{currentStage}<span className="text-sm font-normal text-slate-600"> / 3</span></p></div>
-                <div className="rounded-xl border border-purple-500/20 bg-purple-500/5 p-5"><div className="flex items-center gap-2 text-purple-400"><Phone size={16} /><span className="text-[10px] font-bold uppercase tracking-wider">Current technician</span></div><p className="mt-2 truncate text-sm font-semibold text-white">{incident?.technician?.name || "Unassigned"}</p><p className="mt-1 font-mono text-[11px] text-slate-500">{incident?.technician?.phone || "—"}</p></div>
+                <div className="rounded-xl border border-purple-500/20 bg-purple-500/5 p-5"><div className="flex items-center gap-2 text-purple-400"><Phone size={16} /><span className="text-[10px] font-bold uppercase tracking-wider">Assigned team / engineer</span></div><p className="mt-2 truncate text-sm font-semibold text-white">{incident?.technician?.role || "Unassigned"}</p><p className="mt-1 text-xs text-slate-400">{incident?.technician?.name || "—"}</p><p className="mt-0.5 font-mono text-[11px] text-slate-500">{incident?.technician?.phone || "—"}</p></div>
                 <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-5"><div className="flex items-center gap-2 text-emerald-400"><Activity size={16} /><span className="text-[10px] font-bold uppercase tracking-wider">Workflow state</span></div><p className="mt-2 text-sm font-semibold text-white">{live ? "Escalation in progress" : incident?.status === "ACKNOWLEDGED" ? "Technician acknowledged" : incident?.status === "RESOLVED" ? "Incident resolved" : incident?.status || "Unknown"}</p></div>
               </section>
 
@@ -383,6 +433,14 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                       <p className="text-xs text-slate-300">{match.previousRootCause}</p>
                       <p className="mt-2 text-[10px] text-slate-600">Previous resolution</p>
                       <p className="text-xs text-slate-300">{match.previousResolution || "Not recorded."}</p>
+                    </div>)}</div>
+                  </section>}
+                  {!deviceHistoryLoading && deviceHistory?.length > 0 && <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
+                    <div className="flex items-center gap-2"><Clock3 size={16} className="text-blue-400" /><h3 className="font-semibold text-white">Device history</h3></div>
+                    <p className="mt-1 text-xs text-slate-500">Other incidents on {incident?.device}, regardless of symptom.</p>
+                    <div className="mt-4 space-y-2">{deviceHistory.map(past => <div key={past.incidentId} className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2">
+                      <div className="min-w-0"><p className="truncate font-mono text-xs font-semibold text-slate-300">{past.incidentId}</p><p className="text-[10px] text-slate-600">{formatTime(past.createdAt)}</p></div>
+                      <Pill className={statusStyles[past.status] || statusStyles.OPEN}>{past.status}</Pill>
                     </div>)}</div>
                   </section>}
                   {!changeCorrelationLoading && changeCorrelation && <section className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
@@ -430,7 +488,12 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                     <p className="text-[10px] uppercase tracking-wider text-slate-600">{sla.phase === "RESOLUTION" ? "Resolution SLA" : "Acknowledgement SLA"} · {sla.policy?.[sla.phase === "RESOLUTION" ? "resolutionTimeoutMinutes" : "ackTimeoutMinutes"]}m policy</p>
                     <p className={`mt-1 text-sm font-semibold ${slaOverdue ? "text-red-400" : "text-amber-300"}`}>{slaOverdue ? "Escalation overdue — the engine will advance this shortly." : `${slaMinutesRemaining}m until escalation to Level ${sla.nextLevel}`}</p>
                   </div>}
-                  <div className="mt-5 space-y-3">{[1,2,3].map(level=>{const activeLevel=currentStage===level;const completed=currentStage>level||incident?.status==="ACKNOWLEDGED"||incident?.status==="RESOLVED";return <div key={level} className={`flex items-center gap-3 rounded-xl border p-3 ${activeLevel?"border-blue-500/30 bg-blue-500/10":"border-slate-800 bg-slate-950/40"}`}><div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${completed?"bg-emerald-500/15 text-emerald-400":activeLevel?"bg-blue-500/15 text-blue-400":"bg-slate-800 text-slate-600"}`}>{completed?"✓":`L${level}`}</div><div className="min-w-0"><p className="text-xs font-semibold text-slate-300">Level {level}</p><p className="text-[10px] text-slate-600">{activeLevel?"Current escalation stage":completed?"Completed":"Standby"}</p></div>{activeLevel&&<span className="ml-auto h-2 w-2 animate-pulse rounded-full bg-blue-400"/>}</div>})}</div></section>
+                  <div className="mt-5 space-y-3">{[1,2,3].map(level=>{const activeLevel=currentStage===level;const completed=currentStage>level||incident?.status==="ACKNOWLEDGED"||incident?.status==="RESOLVED";const historyAtLevel=history.find(h=>h.level===level);const teamLabel=historyAtLevel?.technicianRole || `Level ${level}`;const statusLabel=activeLevel&&incident?.status==="ACKNOWLEDGED"?"Acknowledged":activeLevel?"Current escalation stage":completed?"Completed":"Waiting";return <div key={level} className={`flex items-center gap-3 rounded-xl border p-3 ${activeLevel?"border-blue-500/30 bg-blue-500/10":"border-slate-800 bg-slate-950/40"}`}><div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${completed?"bg-emerald-500/15 text-emerald-400":activeLevel?"bg-blue-500/15 text-blue-400":"bg-slate-800 text-slate-600"}`}>{completed?"✓":activeLevel?"●":"○"}</div><div className="min-w-0"><p className="text-xs font-semibold text-slate-300">{teamLabel}</p><p className="text-[10px] text-slate-600">{statusLabel}</p></div>{activeLevel&&<span className="ml-auto h-2 w-2 animate-pulse rounded-full bg-blue-400"/>}</div>})}</div>
+                  <div className="mt-4 flex gap-2">
+                    {incident?.status !== "RESOLVED" && incident?.status !== "ACKNOWLEDGED" && <button onClick={manualAcknowledge} disabled={acknowledgeBusy} className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"><CheckCircle2 size={13} />{acknowledgeBusy ? "Acknowledging…" : "Acknowledge"}</button>}
+                    {incident?.status !== "RESOLVED" && currentStage < 3 && <button onClick={manualEscalate} disabled={escalateBusy} className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-xs font-semibold text-orange-300 hover:bg-orange-500/20 disabled:opacity-50"><ArrowUpCircle size={13} />{escalateBusy ? "Escalating…" : "Escalate now"}</button>}
+                  </div>
+                  </section>
                   {incident?.acknowledgement && <section className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5"><div className="flex gap-3"><CheckCircle2 className="shrink-0 text-emerald-400" size={18} /><div><p className="text-xs font-semibold text-emerald-300">Technician acknowledgement</p><p className="mt-1 text-sm leading-relaxed text-slate-400">{incident.acknowledgement}</p></div></div></section>}
                 </aside>
               </div>
