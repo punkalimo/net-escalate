@@ -5,6 +5,7 @@ import { processIncident } from "../services/incidentService.js";
 import { correlateActiveIncidents, incidentDeviceMatches } from "../services/incidentCorrelationService.js";
 import { computeRootCause } from "../services/rootCauseService.js";
 import { mergeDownstream, computeBlastRadius } from "../services/blastRadiusService.js";
+import { computeRecommendedActions } from "../services/recommendedActionsService.js";
 import { buildTimelineEvent, pushTimelineEvent } from "../services/timelineService.js";
 import { computeSlaStatus } from "../services/escalationPolicyService.js";
 import { MAX_LEVEL } from "../services/incidentService.js";
@@ -241,6 +242,33 @@ export default function incidentRoutes(io) {
     } catch (error) {
       console.error("INCIDENT SLA ERROR:", error);
       return res.status(500).json({ success: false, message: "Failed to compute SLA status.", error: error.message });
+    }
+  });
+
+  router.get("/:incidentId/recommended-actions", async (req, res) => {
+    try {
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+
+      const devices = await Device.find({}).lean();
+      const deviceById = new Map(devices.map(d => [d.deviceId, d]));
+      const device = devices.find(d => incidentDeviceMatches(incident, d)) || null;
+
+      let childRefs = [];
+      if (incident.correlationRole === "ROOT" && incident.correlationGroupId) {
+        const childDocs = await Incident.find({ correlationGroupId: incident.correlationGroupId, correlationRole: "CHILD" }).select("device interfaceName createdAt").lean();
+        childRefs = childDocs.map(child => {
+          const childDevice = devices.find(d => incidentDeviceMatches(child, d)) || null;
+          return { deviceId: childDevice?.deviceId || null, hostname: childDevice?.hostname || child.device, interfaceName: child.interfaceName, createdAt: child.createdAt };
+        });
+      }
+      const downstream = mergeDownstream(childRefs, incident.impactedDevices);
+      const blastRadius = computeBlastRadius(incident, { rootDevice: device, downstream, deviceById });
+
+      return res.json({ success: true, recommendedActions: computeRecommendedActions(incident, { device, blastRadius }) });
+    } catch (error) {
+      console.error("INCIDENT RECOMMENDED ACTIONS ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to compute recommended actions.", error: error.message });
     }
   });
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
-import { Activity, AlertTriangle, CheckCircle2, Clock3, GitMerge, Network, Phone, Radio, RefreshCw, Server, ShieldAlert, Unlink, UserRound, X, Zap } from "lucide-react";
-import { addIncidentComment, getIncident, getIncidentBlastRadius, getIncidentRootCause, getIncidents, getIncidentSla, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
+import { Activity, AlertTriangle, CheckCircle2, Clock3, GitMerge, ListChecks, Network, Phone, Radio, RefreshCw, Server, ShieldAlert, Unlink, UserRound, X, Zap } from "lucide-react";
+import { addIncidentComment, getIncident, getIncidentBlastRadius, getIncidentRecommendedActions, getIncidentRootCause, getIncidents, getIncidentSla, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
@@ -143,6 +143,24 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
   };
 
   useEffect(() => { loadBlastRadius(); }, [incident?.incidentId, incident?.correlationRole, incident?.correlationGroupId, incident?.impactedDevices?.length]);
+
+  const [recommendedActions, setRecommendedActions] = useState(null);
+  const [recommendedActionsLoading, setRecommendedActionsLoading] = useState(true);
+
+  const loadRecommendedActions = async () => {
+    if (!incident?.incidentId) return;
+    setRecommendedActionsLoading(true);
+    try {
+      const result = await getIncidentRecommendedActions(incident.incidentId);
+      if (result.success) setRecommendedActions(result.recommendedActions);
+    } catch (e) {
+      // Non-fatal - the rest of the incident page still works without it.
+    } finally {
+      setRecommendedActionsLoading(false);
+    }
+  };
+
+  useEffect(() => { loadRecommendedActions(); }, [incident?.incidentId, incident?.correlationRole, incident?.correlationGroupId, incident?.description]);
 
   const [sla, setSla] = useState(null);
   const [now, setNow] = useState(() => Date.now());
@@ -286,6 +304,15 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                   </div>
                   {blastRadius.servicesPotentiallyAffected?.length > 0 && <p className="mt-3 text-xs text-slate-500">Potentially affected downstream: {blastRadius.servicesPotentiallyAffected.join(", ")}</p>}
                 </> : <p className="mt-3 text-sm text-slate-500">No downstream impact detected.</p>}
+              </section>
+
+              <section className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.04] p-5 sm:p-6">
+                <div className="flex items-center gap-2"><ListChecks size={18} className="text-emerald-400" /><span className="text-xs font-semibold uppercase tracking-[.16em] text-slate-500">Recommended actions</span></div>
+                {recommendedActionsLoading && !recommendedActions ? <p className="mt-3 text-sm text-slate-500">Building recommended actions…</p> : recommendedActions ? <>
+                  <p className="mt-3 text-sm text-slate-300"><span className="font-semibold text-emerald-300">Probable cause:</span> {recommendedActions.probableCause}</p>
+                  {recommendedActions.contextNotes?.length > 0 && <div className="mt-2 space-y-1">{recommendedActions.contextNotes.map((note, i) => <p key={i} className="text-xs leading-5 text-amber-300">⚠ {note}</p>)}</div>}
+                  <ol className="mt-4 space-y-2">{recommendedActions.actions.map((action, i) => <li key={i} className="flex gap-3 text-sm text-slate-300"><span className="shrink-0 font-mono text-xs text-emerald-500">{i + 1}.</span>{action}</li>)}</ol>
+                </> : <p className="mt-3 text-sm text-slate-500">No recommended actions available yet.</p>}
               </section>
 
               <section className="grid gap-4 md:grid-cols-3">

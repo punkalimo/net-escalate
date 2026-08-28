@@ -12,7 +12,7 @@ const SOURCE_BASE_CONFIDENCE = { DEVICE_MONITOR: 85, INTERFACE_HEALTH: 85, SYSTE
 const CONFIDENCE_CEILING = 97;
 const PROBABLE_THRESHOLD = 75;
 
-function describeFault(incident) {
+export function describeFault(incident) {
   const text = `${incident.description || ""}`.toLowerCase();
   if (incident.source === "INTERFACE_HEALTH") {
     if (text.includes("flap")) return { kind: "Interface flapping", detail: "the interface is repeatedly transitioning up and down" };
@@ -80,4 +80,4 @@ export function computeRootCause(incident, { device, children = [] } = {}) {
   };
 }
 
-export default { computeRootCause };
+export default { computeRootCause, describeFault };
