@@ -23,6 +23,7 @@ export async function getChangeCorrelation(incidentId) { return (await api.get(`
 export async function escalateIncident(incidentId) { return (await api.post(`/incidents/${incidentId}/escalate`)).data; }
 export async function acknowledgeIncident(incidentId, note) { return (await api.post(`/incidents/${incidentId}/acknowledge`, note ? { note } : {})).data; }
 export async function getDeviceHistory(incidentId) { return (await api.get(`/incidents/${incidentId}/device-history`)).data; }
+export async function askAssistant(question, incidentId) { return (await api.post(`/phase4/assistant`, incidentId ? { question, incidentId } : { question })).data; }
 export async function getTechnicians() { return (await api.get("/technicians")).data; }
 export async function createTechnician(technician) { return (await api.post("/technicians", technician)).data; }
 export async function updateTechnician(technicianId, technician) { return (await api.patch(`/technicians/${technicianId}`, technician)).data; }

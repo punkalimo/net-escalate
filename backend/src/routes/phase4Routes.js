@@ -8,6 +8,7 @@ import { computeRootCause } from "../services/rootCauseService.js";
 import { discoverTopology } from "../services/topologyService.js";
 import { discoverInterfaces } from "../services/snmpService.js";
 import { captureSnapshot } from "../services/configSnapshotService.js";
+import { answerIncidentQuestion, extractIncidentId } from "../services/aiAssistantService.js";
 
 export default function phase4Routes(io) {
   const router = express.Router();
@@ -91,6 +92,18 @@ export default function phase4Routes(io) {
   router.post("/assistant", async (req, res) => {
     try {
       const question = String(req.body?.question || "").trim(); if (!question) return res.status(400).json({ success: false, message: "Question is required." });
+
+      // Incident-scoped questions ("Why is NET-1234 critical?") are answered
+      // from that incident's own structured intelligence instead of the
+      // general fleet-wide heuristic below - either an explicit incidentId
+      // from the caller (e.g. the incident page's own "ask" box) or one
+      // named in the question text itself.
+      const incidentId = String(req.body?.incidentId || "").trim().toUpperCase() || extractIncidentId(question);
+      if (incidentId) {
+        const scoped = await answerIncidentQuestion(question, incidentId);
+        if (scoped.success) return res.json(scoped);
+      }
+
       const [devices, incidents, samples] = await Promise.all([Device.find({}).lean(), Incident.find({ status: { $ne: "RESOLVED" } }).sort({ createdAt: -1 }).limit(100).lean(), InterfaceSample.find({}).sort({ sampledAt: -1 }).limit(100).lean()]);
       const down = devices.filter(d => d.status === "DOWN"); const critical = incidents.filter(i => i.severity === "critical"); const highUtil = samples.filter(s => Number(s.utilizationPercent) >= 80);
       const answer = critical.length ? `There are ${critical.length} critical active incident(s). Start with ${critical[0].device} (${critical[0].incidentId}) and inspect its upstream path before working on correlated children.` : down.length ? `${down.length} device(s) are currently DOWN. Prioritize reachability and upstream path checks for ${down[0].hostname}.` : highUtil.length ? `${highUtil.length} recent interface sample(s) show utilization at or above 80%. Inspect the affected interface(s) for congestion, errors and discards.` : "No dominant critical signal is currently visible. Review recent incidents, interface health and topology evidence.";

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
-import { Activity, AlertTriangle, ArrowUpCircle, CheckCircle2, Clock3, GitCommit, GitMerge, History, ListChecks, Network, Phone, Radio, RefreshCw, Server, ShieldAlert, Unlink, UserRound, X, Zap } from "lucide-react";
-import { acknowledgeIncident, addIncidentComment, escalateIncident, getChangeCorrelation, getDeviceHistory, getIncident, getIncidentBlastRadius, getIncidentRecommendedActions, getIncidentRootCause, getIncidents, getIncidentSla, getSimilarIncidents, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
+import { Activity, AlertTriangle, ArrowUpCircle, Bot, CheckCircle2, Clock3, GitCommit, GitMerge, History, ListChecks, Network, Phone, Radio, RefreshCw, Send, Server, ShieldAlert, Unlink, UserRound, X, Zap } from "lucide-react";
+import { acknowledgeIncident, addIncidentComment, askAssistant, escalateIncident, getChangeCorrelation, getDeviceHistory, getIncident, getIncidentBlastRadius, getIncidentRecommendedActions, getIncidentRootCause, getIncidents, getIncidentSla, getSimilarIncidents, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
@@ -234,6 +234,26 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
     }
   }
 
+  const [assistantQuestion, setAssistantQuestion] = useState("");
+  const [assistantAnswer, setAssistantAnswer] = useState(null);
+  const [assistantBusy, setAssistantBusy] = useState(false);
+  const QUICK_QUESTIONS = ["Why is this critical?", "What devices are affected?", "What is the probable root cause?", "What changed before the incident?", "Have we seen this before?", "What should I check first?", "Who is responsible?", "How long until escalation?", "Summarize this for management."];
+
+  async function askAboutIncident(text) {
+    const q = (text ?? assistantQuestion).trim();
+    if (!q || !incident?.incidentId) return;
+    setAssistantBusy(true);
+    setAssistantQuestion(q);
+    try {
+      const result = await askAssistant(q, incident.incidentId);
+      setAssistantAnswer(result.success ? result : { answer: result.message || "Unable to answer that question." });
+    } catch (e) {
+      setAssistantAnswer({ answer: e.response?.data?.message || e.message || "Unable to answer that question." });
+    } finally {
+      setAssistantBusy(false);
+    }
+  }
+
   async function manualAcknowledge() {
     if (!incident?.incidentId) return;
     setAcknowledgeBusy(true);
@@ -423,6 +443,14 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                 </div>
 
                 <aside className="space-y-6">
+                  <section className="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-5">
+                    <div className="flex items-center gap-2"><Bot size={16} className="text-blue-400" /><h3 className="font-semibold text-white">Ask about this incident</h3></div>
+                    <p className="mt-1 text-xs text-slate-500">Answers are read directly from this incident's own data - nothing is invented.</p>
+                    <div className="mt-3 flex flex-wrap gap-1.5">{QUICK_QUESTIONS.map(q => <button key={q} onClick={() => askAboutIncident(q)} disabled={assistantBusy} className="rounded-full border border-slate-700 px-2.5 py-1 text-[10px] text-slate-400 hover:border-blue-500/30 hover:text-blue-300 disabled:opacity-50">{q}</button>)}</div>
+                    <div className="mt-3 flex gap-2"><input value={assistantQuestion} onChange={e => setAssistantQuestion(e.target.value)} onKeyDown={e => e.key === "Enter" && askAboutIncident()} placeholder="Ask a question…" className="form-input flex-1 text-sm" /><button onClick={() => askAboutIncident()} disabled={assistantBusy || !assistantQuestion.trim()} className="rounded-lg bg-blue-600 px-3 py-2 text-white disabled:opacity-50"><Send size={14} /></button></div>
+                    {assistantBusy && <p className="mt-3 text-xs text-slate-500">Thinking…</p>}
+                    {assistantAnswer && !assistantBusy && <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/60 p-3"><p className="text-sm leading-relaxed text-slate-200">{assistantAnswer.answer}</p>{assistantAnswer.evidence?.length > 0 && <div className="mt-2 space-y-1">{assistantAnswer.evidence.map((e, i) => <p key={i} className="text-[10px] leading-4 text-slate-600">• {e}</p>)}</div>}</div>}
+                  </section>
                   {!similarIncidentsLoading && similarIncidents?.length > 0 && <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
                     <div className="flex items-center gap-2"><History size={16} className="text-blue-400" /><h3 className="font-semibold text-white">Similar previous incidents</h3></div>
                     <p className="mt-1 text-xs text-slate-500">Resolved incidents with a similar device, interface, alert type or symptom.</p>
