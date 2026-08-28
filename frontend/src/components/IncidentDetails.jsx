@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
-import { Activity, AlertTriangle, CheckCircle2, Clock3, GitMerge, History, ListChecks, Network, Phone, Radio, RefreshCw, Server, ShieldAlert, Unlink, UserRound, X, Zap } from "lucide-react";
-import { addIncidentComment, getIncident, getIncidentBlastRadius, getIncidentRecommendedActions, getIncidentRootCause, getIncidents, getIncidentSla, getSimilarIncidents, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
+import { Activity, AlertTriangle, CheckCircle2, Clock3, GitCommit, GitMerge, History, ListChecks, Network, Phone, Radio, RefreshCw, Server, ShieldAlert, Unlink, UserRound, X, Zap } from "lucide-react";
+import { addIncidentComment, getChangeCorrelation, getIncident, getIncidentBlastRadius, getIncidentRecommendedActions, getIncidentRootCause, getIncidents, getIncidentSla, getSimilarIncidents, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
@@ -180,6 +180,24 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
   };
 
   useEffect(() => { loadSimilarIncidents(); }, [incident?.incidentId]);
+
+  const [changeCorrelation, setChangeCorrelation] = useState(null);
+  const [changeCorrelationLoading, setChangeCorrelationLoading] = useState(true);
+
+  const loadChangeCorrelation = async () => {
+    if (!incident?.incidentId) return;
+    setChangeCorrelationLoading(true);
+    try {
+      const result = await getChangeCorrelation(incident.incidentId);
+      if (result.success) setChangeCorrelation(result.changeCorrelation);
+    } catch (e) {
+      // Non-fatal - the rest of the incident page still works without it.
+    } finally {
+      setChangeCorrelationLoading(false);
+    }
+  };
+
+  useEffect(() => { loadChangeCorrelation(); }, [incident?.incidentId]);
 
   const [sla, setSla] = useState(null);
   const [now, setNow] = useState(() => Date.now());
@@ -366,6 +384,15 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                       <p className="mt-2 text-[10px] text-slate-600">Previous resolution</p>
                       <p className="text-xs text-slate-300">{match.previousResolution || "Not recorded."}</p>
                     </div>)}</div>
+                  </section>}
+                  {!changeCorrelationLoading && changeCorrelation && <section className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
+                    <div className="flex items-center gap-2"><GitCommit size={16} className="text-amber-400" /><h3 className="font-semibold text-white">{changeCorrelation.label}</h3></div>
+                    <div className="mt-3 space-y-2 text-xs">
+                      <div className="flex justify-between"><span className="text-slate-600">Configuration change detected</span><span className="text-slate-300">{formatTime(changeCorrelation.changeDetectedAt)}</span></div>
+                      <div className="flex justify-between"><span className="text-slate-600">Incident detected</span><span className="text-slate-300">{formatTime(changeCorrelation.incidentDetectedAt)}</span></div>
+                      <div className="flex justify-between"><span className="text-slate-600">Time difference</span><span className="font-semibold text-amber-300">{changeCorrelation.timeDifferenceLabel}</span></div>
+                    </div>
+                    {changeCorrelation.snapshotIntervalMinutes != null && <p className="mt-3 text-[10px] leading-4 text-slate-600">The change was detected during a routine {changeCorrelation.snapshotIntervalMinutes}-minute config check, so it may have occurred any time in that window - not necessarily at the exact timestamp shown.</p>}
                   </section>}
                   {(blastRadius?.downstreamDevices?.length > 0 || incident?.impactedDevices?.length > 0) && <section className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
                     {(() => { const list = blastRadius?.downstreamDevices?.length ? blastRadius.downstreamDevices : incident.impactedDevices.map(d => ({ deviceId: d.deviceId, hostname: d.hostname, status: d.status, interfaceName: null })); return <>

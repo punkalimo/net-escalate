@@ -18,6 +18,7 @@ export async function addIncidentComment(incidentId, message, actor) { return (a
 export async function getIncidentSla(incidentId) { return (await api.get(`/incidents/${incidentId}/sla`)).data; }
 export async function getIncidentRecommendedActions(incidentId) { return (await api.get(`/incidents/${incidentId}/recommended-actions`)).data; }
 export async function getSimilarIncidents(incidentId) { return (await api.get(`/incidents/${incidentId}/similar-incidents`)).data; }
+export async function getChangeCorrelation(incidentId) { return (await api.get(`/incidents/${incidentId}/change-correlation`)).data; }
 export async function getTechnicians() { return (await api.get("/technicians")).data; }
 export async function createTechnician(technician) { return (await api.post("/technicians", technician)).data; }
 export async function updateTechnician(technicianId, technician) { return (await api.patch(`/technicians/${technicianId}`, technician)).data; }

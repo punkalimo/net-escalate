@@ -7,6 +7,7 @@ import { computeRootCause } from "../services/rootCauseService.js";
 import { mergeDownstream, computeBlastRadius } from "../services/blastRadiusService.js";
 import { computeRecommendedActions } from "../services/recommendedActionsService.js";
 import { findSimilarIncidents } from "../services/historicalMatchService.js";
+import { findPossibleChangeCause } from "../services/changeCorrelationService.js";
 import { buildTimelineEvent, pushTimelineEvent } from "../services/timelineService.js";
 import { computeSlaStatus } from "../services/escalationPolicyService.js";
 import { MAX_LEVEL } from "../services/incidentService.js";
@@ -281,6 +282,17 @@ export default function incidentRoutes(io) {
     } catch (error) {
       console.error("INCIDENT SIMILAR-INCIDENTS ERROR:", error);
       return res.status(500).json({ success: false, message: "Failed to find similar incidents.", error: error.message });
+    }
+  });
+
+  router.get("/:incidentId/change-correlation", async (req, res) => {
+    try {
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+      return res.json({ success: true, changeCorrelation: await findPossibleChangeCause(incident) });
+    } catch (error) {
+      console.error("INCIDENT CHANGE CORRELATION ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to correlate configuration changes.", error: error.message });
     }
   });
 

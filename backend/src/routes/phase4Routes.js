@@ -1,5 +1,4 @@
 import express from "express";
-import crypto from "node:crypto";
 import Device from "../models/Device.js";
 import Incident from "../models/Incident.js";
 import InterfaceSample from "../models/InterfaceSample.js";
@@ -8,16 +7,7 @@ import { correlateActiveIncidents } from "../services/incidentCorrelationService
 import { computeRootCause } from "../services/rootCauseService.js";
 import { discoverTopology } from "../services/topologyService.js";
 import { discoverInterfaces } from "../services/snmpService.js";
-
-function fingerprint(value) { return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
-
-async function captureSnapshot(device) {
-  const config = { hostname: device.hostname, ipAddress: device.ipAddress, deviceType: device.deviceType, vendor: device.vendor, model: device.model, interfaces: device.interfaces, monitoringMethods: device.monitoringMethods, monitoredPorts: device.monitoredPorts, snmp: { enabled: device.snmp?.enabled, version: device.snmp?.version } };
-  const fp = fingerprint(config);
-  const previous = await ConfigSnapshot.findOne({ deviceId: device.deviceId }).sort({ capturedAt: -1 }).lean();
-  const changes = previous && previous.fingerprint !== fp ? ["Configuration fingerprint changed", "Compare the latest interface, monitoring and port inventory"] : [];
-  return ConfigSnapshot.create({ deviceId: device.deviceId, hostname: device.hostname, fingerprint: fp, config, changed: Boolean(changes.length), changes });
-}
+import { captureSnapshot } from "../services/configSnapshotService.js";
 
 export default function phase4Routes(io) {
   const router = express.Router();
