@@ -7,7 +7,7 @@ api.interceptors.response.use(response => response, error => { console.error("AP
 export async function getIncidents() { return (await api.get("/incidents")).data; }
 export async function getIncident(incidentId) { return (await api.get(`/incidents/${incidentId}`)).data; }
 export async function createIncident(incident) { return (await api.post("/incidents", incident)).data; }
-export async function resolveIncident(incidentId) { return (await api.patch(`/incidents/${incidentId}/resolve`)).data; }
+export async function resolveIncident(incidentId, resolutionNotes) { return (await api.patch(`/incidents/${incidentId}/resolve`, resolutionNotes ? { resolutionNotes } : {})).data; }
 export async function getIncidentCorrelation(refresh = false) { return (await api.get(`/incidents/correlation${refresh ? "?refresh=true" : ""}`)).data; }
 export async function rebuildIncidentCorrelation() { return (await api.post("/incidents/correlation/rebuild")).data; }
 export async function mergeIncident(incidentId, intoIncidentId) { return (await api.post(`/incidents/${incidentId}/merge`, { intoIncidentId })).data; }
@@ -17,6 +17,7 @@ export async function getIncidentBlastRadius(incidentId) { return (await api.get
 export async function addIncidentComment(incidentId, message, actor) { return (await api.post(`/incidents/${incidentId}/comment`, { message, actor })).data; }
 export async function getIncidentSla(incidentId) { return (await api.get(`/incidents/${incidentId}/sla`)).data; }
 export async function getIncidentRecommendedActions(incidentId) { return (await api.get(`/incidents/${incidentId}/recommended-actions`)).data; }
+export async function getSimilarIncidents(incidentId) { return (await api.get(`/incidents/${incidentId}/similar-incidents`)).data; }
 export async function getTechnicians() { return (await api.get("/technicians")).data; }
 export async function createTechnician(technician) { return (await api.post("/technicians", technician)).data; }
 export async function updateTechnician(technicianId, technician) { return (await api.patch(`/technicians/${technicianId}`, technician)).data; }

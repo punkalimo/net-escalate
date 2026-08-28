@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
-import { Activity, AlertTriangle, CheckCircle2, Clock3, GitMerge, ListChecks, Network, Phone, Radio, RefreshCw, Server, ShieldAlert, Unlink, UserRound, X, Zap } from "lucide-react";
-import { addIncidentComment, getIncident, getIncidentBlastRadius, getIncidentRecommendedActions, getIncidentRootCause, getIncidents, getIncidentSla, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
+import { Activity, AlertTriangle, CheckCircle2, Clock3, GitMerge, History, ListChecks, Network, Phone, Radio, RefreshCw, Server, ShieldAlert, Unlink, UserRound, X, Zap } from "lucide-react";
+import { addIncidentComment, getIncident, getIncidentBlastRadius, getIncidentRecommendedActions, getIncidentRootCause, getIncidents, getIncidentSla, getSimilarIncidents, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
@@ -162,6 +162,25 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
 
   useEffect(() => { loadRecommendedActions(); }, [incident?.incidentId, incident?.correlationRole, incident?.correlationGroupId, incident?.description]);
 
+  const [resolutionNotesDraft, setResolutionNotesDraft] = useState("");
+  const [similarIncidents, setSimilarIncidents] = useState(null);
+  const [similarIncidentsLoading, setSimilarIncidentsLoading] = useState(true);
+
+  const loadSimilarIncidents = async () => {
+    if (!incident?.incidentId) return;
+    setSimilarIncidentsLoading(true);
+    try {
+      const result = await getSimilarIncidents(incident.incidentId);
+      if (result.success) setSimilarIncidents(result.similarIncidents);
+    } catch (e) {
+      // Non-fatal - the rest of the incident page still works without it.
+    } finally {
+      setSimilarIncidentsLoading(false);
+    }
+  };
+
+  useEffect(() => { loadSimilarIncidents(); }, [incident?.incidentId]);
+
   const [sla, setSla] = useState(null);
   const [now, setNow] = useState(() => Date.now());
 
@@ -229,7 +248,7 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
     if (!incident?.incidentId || incident.status === "RESOLVED") return;
     setBusy(true);
     try {
-      const result = await resolveIncident(incident.incidentId);
+      const result = await resolveIncident(incident.incidentId, resolutionNotesDraft.trim());
       if (!result.success) throw new Error(result.message || "Failed to resolve incident.");
       setIncident(result.incident);
       onResolved?.(result.incident);
@@ -336,6 +355,18 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                 </div>
 
                 <aside className="space-y-6">
+                  {!similarIncidentsLoading && similarIncidents?.length > 0 && <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
+                    <div className="flex items-center gap-2"><History size={16} className="text-blue-400" /><h3 className="font-semibold text-white">Similar previous incidents</h3></div>
+                    <p className="mt-1 text-xs text-slate-500">Resolved incidents with a similar device, interface, alert type or symptom.</p>
+                    <div className="mt-4 space-y-3">{similarIncidents.map(match => <div key={match.incidentId} className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+                      <div className="flex items-center justify-between gap-2"><span className="font-mono text-xs font-bold text-white">{match.incidentId}</span><span className={`text-[10px] font-bold ${match.similarity >= 70 ? "text-emerald-400" : "text-amber-400"}`}>{match.similarity}% similar</span></div>
+                      <p className="mt-1 text-xs text-slate-500">{match.device}</p>
+                      <p className="mt-2 text-[10px] text-slate-600">Previous root cause</p>
+                      <p className="text-xs text-slate-300">{match.previousRootCause}</p>
+                      <p className="mt-2 text-[10px] text-slate-600">Previous resolution</p>
+                      <p className="text-xs text-slate-300">{match.previousResolution || "Not recorded."}</p>
+                    </div>)}</div>
+                  </section>}
                   {(blastRadius?.downstreamDevices?.length > 0 || incident?.impactedDevices?.length > 0) && <section className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
                     {(() => { const list = blastRadius?.downstreamDevices?.length ? blastRadius.downstreamDevices : incident.impactedDevices.map(d => ({ deviceId: d.deviceId, hostname: d.hostname, status: d.status, interfaceName: null })); return <>
                       <div className="flex items-center gap-2"><Server size={16} className="text-amber-400" /><h3 className="font-semibold text-white">Downstream devices ({list.length})</h3></div>
@@ -381,7 +412,7 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
         </div>
 
         <footer className="shrink-0 border-t border-slate-800 bg-[#080d16] px-5 py-4 sm:px-8">
-          <div className="mx-auto flex w-full max-w-[1800px] items-center justify-between gap-3"><button onClick={load} disabled={loading} className="flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-400 hover:text-white"><RefreshCw size={14} className={loading ? "animate-spin" : ""} /> Refresh</button><div className="flex items-center gap-2">{incident?.status !== "RESOLVED" && <button onClick={resolve} disabled={busy || loading} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{busy ? "Resolving…" : "Resolve incident"}</button>}<button onClick={onClose} className="rounded-lg border border-slate-700 px-4 py-2 text-xs font-semibold text-slate-300">Back to incidents</button></div></div>
+          <div className="mx-auto flex w-full max-w-[1800px] items-center justify-between gap-3"><button onClick={load} disabled={loading} className="flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-400 hover:text-white"><RefreshCw size={14} className={loading ? "animate-spin" : ""} /> Refresh</button><div className="flex items-center gap-2">{incident?.status !== "RESOLVED" && !["DEVICE_MONITOR", "INTERFACE_HEALTH"].includes(incident?.source) && <input value={resolutionNotesDraft} onChange={e => setResolutionNotesDraft(e.target.value)} placeholder="Resolution notes (optional)…" className="form-input hidden w-56 text-xs md:block" />}{incident?.status !== "RESOLVED" && <button onClick={resolve} disabled={busy || loading} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{busy ? "Resolving…" : "Resolve incident"}</button>}<button onClick={onClose} className="rounded-lg border border-slate-700 px-4 py-2 text-xs font-semibold text-slate-300">Back to incidents</button></div></div>
         </footer>
       </div>
     </div>

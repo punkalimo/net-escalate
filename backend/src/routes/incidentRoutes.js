@@ -6,6 +6,7 @@ import { correlateActiveIncidents, incidentDeviceMatches } from "../services/inc
 import { computeRootCause } from "../services/rootCauseService.js";
 import { mergeDownstream, computeBlastRadius } from "../services/blastRadiusService.js";
 import { computeRecommendedActions } from "../services/recommendedActionsService.js";
+import { findSimilarIncidents } from "../services/historicalMatchService.js";
 import { buildTimelineEvent, pushTimelineEvent } from "../services/timelineService.js";
 import { computeSlaStatus } from "../services/escalationPolicyService.js";
 import { MAX_LEVEL } from "../services/incidentService.js";
@@ -272,6 +273,17 @@ export default function incidentRoutes(io) {
     }
   });
 
+  router.get("/:incidentId/similar-incidents", async (req, res) => {
+    try {
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+      return res.json({ success: true, similarIncidents: await findSimilarIncidents(incident) });
+    } catch (error) {
+      console.error("INCIDENT SIMILAR-INCIDENTS ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to find similar incidents.", error: error.message });
+    }
+  });
+
   router.get("/:incidentId/root-cause", async (req, res) => {
     try {
       const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
@@ -344,9 +356,11 @@ export default function incidentRoutes(io) {
         });
       }
 
+      const resolutionNotes = String(req.body?.resolutionNotes || "").trim();
       incident.status = "RESOLVED";
       incident.resolvedAt = new Date();
-      pushTimelineEvent(incident, "INCIDENT_RESOLVED", "Incident manually resolved by a NOC engineer.", { actor: "NOC engineer" });
+      if (resolutionNotes) incident.resolutionNotes = resolutionNotes;
+      pushTimelineEvent(incident, "INCIDENT_RESOLVED", resolutionNotes ? `Incident manually resolved by a NOC engineer. Resolution: ${resolutionNotes}` : "Incident manually resolved by a NOC engineer.", { actor: "NOC engineer" });
       await incident.save();
       if (io) io.emit("incident_updated", incident);
       return res.json({ success: true, incident });

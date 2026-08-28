@@ -76,6 +76,11 @@ const incidentSchema = new mongoose.Schema(
     callProviderRetryable: { type: Boolean, default: false },
     acknowledgement: { type: String, default: null },
     resolvedAt: { type: Date, default: null },
+    // What a NOC engineer actually did to fix it, entered optionally when
+    // manually resolving. This is the only source of "previous resolution"
+    // text for historical-incident matching - automatic incidents self-
+    // resolve on recovery with no human diagnosis to record.
+    resolutionNotes: { type: String, default: null },
     source: { type: String, enum: ["MANUAL", "DEVICE_MONITOR", "INTERFACE_HEALTH", "SYSTEM_HEALTH"], default: "MANUAL" },
     fingerprint: { type: String, default: null, index: true },
     interfaceName: { type: String, default: null },
