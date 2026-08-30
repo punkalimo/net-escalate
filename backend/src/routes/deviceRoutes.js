@@ -144,7 +144,7 @@ router.get(
         try {
             const devices =
                 await Device
-                    .find({})
+                    .find({ realmId: req.realmId })
                     .sort({
                         createdAt: -1
                     })
@@ -179,7 +179,8 @@ router.get(
             const device =
                 await Device.findOne({
                     deviceId:
-                        req.params.deviceId
+                        req.params.deviceId,
+                    realmId: req.realmId
                 }).lean();
 
             if (!device) {
@@ -215,7 +216,7 @@ router.get(
     "/:deviceId/system-health/history",
     async (req, res) => {
         try {
-            const device = await Device.findOne({ deviceId: req.params.deviceId }).select("deviceId").lean();
+            const device = await Device.findOne({ deviceId: req.params.deviceId, realmId: req.realmId }).select("deviceId").lean();
             if (!device) {
                 return res.status(404).json({ success: false, message: "Device not found." });
             }
@@ -223,7 +224,7 @@ router.get(
             const hours = Math.min(168, Math.max(1, Number(req.query.hours || 24)));
             const metric = ["cpu", "memory"].includes(req.query.metric) ? req.query.metric : null;
             const since = new Date(Date.now() - hours * 60 * 60 * 1000);
-            const query = { deviceId: device.deviceId, sampledAt: { $gte: since } };
+            const query = { realmId: req.realmId, deviceId: device.deviceId, sampledAt: { $gte: since } };
             if (metric) query.metric = metric;
 
             const samples = await DeviceSystemSample.find(query).sort({ sampledAt: 1 }).lean();
@@ -298,7 +299,8 @@ router.post(
                     ipAddress:
                         String(
                             ipAddress
-                        ).trim()
+                        ).trim(),
+                    realmId: req.realmId
                 });
 
             if (existingIp) {
@@ -343,6 +345,9 @@ router.post(
             const deviceData = {
                 deviceId:
                     finalDeviceId,
+
+                realmId:
+                    req.realmId,
 
                 hostname:
                     String(
@@ -608,7 +613,8 @@ router.post(
             const device =
                 await Device.findOne({
                     deviceId:
-                        req.params.deviceId
+                        req.params.deviceId,
+                    realmId: req.realmId
                 });
 
             if (!device) {
@@ -685,7 +691,8 @@ router.post(
             const device =
                 await Device.findOne({
                     deviceId:
-                        req.params.deviceId
+                        req.params.deviceId,
+                    realmId: req.realmId
                 });
 
             if (!device) {
@@ -763,7 +770,8 @@ router.patch(
             const device =
                 await Device.findOne({
                     deviceId:
-                        req.params.deviceId
+                        req.params.deviceId,
+                    realmId: req.realmId
                 });
 
             if (!device) {
@@ -853,7 +861,8 @@ router.delete(
             const device =
                 await Device.findOne({
                     deviceId:
-                        req.params.deviceId
+                        req.params.deviceId,
+                    realmId: req.realmId
                 });
 
             if (!device) {
@@ -870,7 +879,8 @@ router.delete(
 
             await Device.deleteOne({
                 deviceId:
-                    device.deviceId
+                    device.deviceId,
+                realmId: req.realmId
             });
 
             return res.json({

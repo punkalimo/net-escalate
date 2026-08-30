@@ -2,6 +2,7 @@ import Incident from "../models/Incident.js";
 import Technician from "../models/Technician.js";
 import { computeSeverityWithReasons } from "./severityService.js";
 import { buildTimelineEvent } from "./timelineService.js";
+import { emitToRealm } from "./realtimeService.js";
 
 // Shared incident lifecycle for any monitored fault condition - interface
 // status, interface error-rate degradation, interface flapping, or
@@ -20,8 +21,10 @@ async function generateUniqueIncidentId() {
   return `NET-${Date.now().toString().slice(-9)}`;
 }
 
-async function getLevelOneTechnician() {
-  return Technician.findOne({ active: true, level: 1 }).sort({ createdAt: 1 }).lean();
+// realmId scoped: without it, an interface/system-health fault on one
+// realm's device could get assigned to another realm's technician.
+async function getLevelOneTechnician(realmId) {
+  return Technician.findOne({ realmId, active: true, level: 1 }).sort({ createdAt: 1 }).lean();
 }
 
 export async function syncFaultIncident({
@@ -51,7 +54,7 @@ export async function syncFaultIncident({
         },
         { new: true }
       );
-      if (resolved && global.io) global.io.emit("incident_updated", resolved);
+      if (resolved && global.io) emitToRealm(device.realmId, "incident_updated", resolved);
     }
     return { incidentId: null, latch: false, recovered: Boolean(currentIncidentId) };
   }
@@ -63,7 +66,7 @@ export async function syncFaultIncident({
   const lockKey = fingerprint;
 
   if (currentIncidentId) {
-    const current = await Incident.findOne({ incidentId: currentIncidentId })
+    const current = await Incident.findOne({ incidentId: currentIncidentId, realmId: device.realmId })
       .select("incidentId status source fingerprint")
       .lean();
 
@@ -78,7 +81,7 @@ export async function syncFaultIncident({
     }
   }
 
-  const existing = await Incident.findOne({ source, fingerprint, status: { $ne: "RESOLVED" } }).sort({ createdAt: -1 }).lean();
+  const existing = await Incident.findOne({ realmId: device.realmId, source, fingerprint, status: { $ne: "RESOLVED" } }).sort({ createdAt: -1 }).lean();
   if (existing) {
     return { incidentId: existing.incidentId, latch: true, recovered: false };
   }
@@ -93,12 +96,12 @@ export async function syncFaultIncident({
 
   incidentLocks.add(lockKey);
   try {
-    const duplicate = await Incident.findOne({ source, fingerprint, status: { $ne: "RESOLVED" } }).sort({ createdAt: -1 }).lean();
+    const duplicate = await Incident.findOne({ realmId: device.realmId, source, fingerprint, status: { $ne: "RESOLVED" } }).sort({ createdAt: -1 }).lean();
     if (duplicate) {
       return { incidentId: duplicate.incidentId, latch: true, recovered: false };
     }
 
-    const technician = await getLevelOneTechnician();
+    const technician = await getLevelOneTechnician(device.realmId);
     if (!technician?.phone) {
       console.warn(`[FAULT INCIDENT] No active level 1 technician; incident not created for ${deviceLabel}`);
       return { incidentId: currentIncidentId, latch: false, recovered: false };
@@ -111,6 +114,7 @@ export async function syncFaultIncident({
       try {
         const incident = await Incident.create({
           incidentId,
+          realmId: device.realmId,
           deviceId: device.deviceId,
           device: deviceLabel,
           location: device.location || "Unknown location",
@@ -128,7 +132,7 @@ export async function syncFaultIncident({
           ]
         });
 
-        if (global.io) global.io.emit("incident_created", incident);
+        if (global.io) emitToRealm(device.realmId, "incident_created", incident);
 
         const { processIncident } = await import("./incidentService.js");
         processIncident(incident, global.io).catch(error => {

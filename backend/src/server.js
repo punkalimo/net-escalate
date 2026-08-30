@@ -14,8 +14,9 @@ import interfaceRoutes from "./routes/interfaceRoutes.js";
 import topologyRoutes from "./routes/topologyRoutes.js";
 import devicePathRoutes from "./routes/devicePathRoutes.js";
 import phase4Routes from "./routes/phase4Routes.js";
-import { requireAuth } from "./middleware/authMiddleware.js";
-import { verifyAuthToken, AUTH_COOKIE_NAME } from "./services/authService.js";
+import platformRoutes from "./routes/platformRoutes.js";
+import { requireAuth, requirePlatform, attachRealmScope } from "./middleware/authMiddleware.js";
+import { verifyAuthToken, AUTH_COOKIE_NAME, verifyRealmContext, REALM_CONTEXT_COOKIE_NAME } from "./services/authService.js";
 import { startAllDeviceMonitoring, setMonitoringSocket } from "./services/deviceMonitoringService.js";
 import { startAllInterfaceMonitoring } from "./services/interfaceMonitoringService.js";
 import { startSeverityEscalationSweep, stopSeverityEscalationSweep } from "./services/severityService.js";
@@ -41,6 +42,15 @@ app.use("/api/auth", authRoutes());
 // /api/health and /api/auth above, so those stay public (Express matches
 // middleware in registration order).
 app.use("/api", requireAuth);
+// Platform routes are a separate authority axis (requirePlatform, not tied
+// to any single realm) - mounted before attachRealmScope/the tenant routes
+// below since they don't want a realm filter forced onto them.
+app.use("/api/platform", requirePlatform, platformRoutes());
+// Every tenant-scoped route below relies on req.realmId, computed here from
+// the authenticated session (or a platform admin's Enter Realm context) -
+// see attachRealmScope's own comment for why this must never come from a
+// client-supplied param.
+app.use("/api", attachRealmScope);
 app.use("/api/incidents", incidentRoutes(io));
 app.use("/api/technicians", technicianRoutes);
 app.use("/api/devices", deviceRoutes);
@@ -48,16 +58,39 @@ app.use("/api/interfaces", interfaceRoutes);
 app.use("/api/topology", topologyRoutes);
 app.use("/api/topology", devicePathRoutes);
 app.use("/api/phase4", phase4Routes(io));
+// Mirrors attachRealmScope's logic exactly (see its comment) so a socket's
+// realm room matches whatever the same session's REST requests are scoped
+// to - including a platform admin's Enter Realm context, so live updates
+// keep working during a support session.
 io.use((socket, next) => {
   try {
     const cookies = parseCookie(socket.handshake.headers.cookie || "");
-    socket.user = verifyAuthToken(cookies[AUTH_COOKIE_NAME]);
+    const user = verifyAuthToken(cookies[AUTH_COOKIE_NAME]);
+    socket.user = user;
+    if (user.platformRole) {
+      try {
+        const context = verifyRealmContext(cookies[REALM_CONTEXT_COOKIE_NAME]);
+        socket.realmId = context.realmId;
+      } catch (contextError) {
+        socket.realmId = null;
+      }
+    } else {
+      socket.realmId = user.realmId || null;
+    }
     return next();
   } catch (error) {
     return next(new Error("unauthorized"));
   }
 });
-io.on("connection", socket => { console.log("Dashboard connected:", socket.id, `(${socket.user?.username})`); socket.on("disconnect", () => console.log("Dashboard disconnected:", socket.id)); });
+io.on("connection", socket => {
+  console.log("Dashboard connected:", socket.id, `(${socket.user?.username})`);
+  // Every realm-scoped push (see realtimeService.js's emitToRealm) targets
+  // this room - a socket with no realmId (a platform admin who hasn't
+  // entered a realm) simply joins nothing and receives no tenant-owned
+  // real-time events, matching how their REST requests behave too.
+  if (socket.realmId) socket.join(String(socket.realmId));
+  socket.on("disconnect", () => console.log("Dashboard disconnected:", socket.id));
+});
 const PORT = process.env.PORT || 5000;
 let monitoringStarted = false;
 function startBackgroundMonitoring() { if (monitoringStarted) return; monitoringStarted = true; Promise.allSettled([startAllDeviceMonitoring(), startAllInterfaceMonitoring()]).then(results => results.forEach((result, index) => { const name = index === 0 ? "device monitoring" : "interface monitoring"; if (result.status === "fulfilled") console.log(`[STARTUP] ${name} initialized.`); else console.error(`[STARTUP] ${name} failed:`, result.reason); })); startSeverityEscalationSweep(); startIncidentCorrelationSweep(); startEscalationTimeoutSweep(); startConfigSnapshotSweep(); }

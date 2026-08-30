@@ -1,15 +1,19 @@
 import Technician from "../models/Technician.js";
 import { escalateToTechnician } from "./escalationService.js";
 import { pushTimelineEvent } from "./timelineService.js";
+import { emitToRealm } from "./realtimeService.js";
 
 export const MAX_LEVEL = 3;
 
 function emitIncidentUpdate(io, incident) {
-  if (io) io.emit("incident_updated", incident);
+  if (io) emitToRealm(incident.realmId, "incident_updated", incident);
 }
 
-async function getTechnicianForLevel(level) {
-  return Technician.findOne({ level, active: true }).sort({ createdAt: 1 });
+// realmId scoped: without it, an incident in one realm could get escalated
+// to another realm's technician entirely - the calling code always has this
+// available from incident.realmId, since every Incident now carries one.
+async function getTechnicianForLevel(level, realmId) {
+  return Technician.findOne({ realmId, level, active: true }).sort({ createdAt: 1 });
 }
 
 function addHistoryEntry(incident, technician, level) {
@@ -42,7 +46,7 @@ export async function processIncident(incident, io) {
       console.log(`Incident: ${incident.incidentId}`);
       console.log("========================================");
 
-      const technician = await getTechnicianForLevel(level);
+      const technician = await getTechnicianForLevel(level, incident.realmId);
       if (!technician) {
         level += 1;
         if (level <= MAX_LEVEL) {

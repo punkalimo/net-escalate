@@ -6,6 +6,8 @@ import TopologyErrorBoundary from "./components/TopologyErrorBoundary";
 import RootCauseCenter from "./components/RootCauseCenter";
 import Phase4CommandCenter from "./components/Phase4CommandCenter";
 import Login from "./components/Login";
+import EnterRealmBanner from "./components/EnterRealmBanner";
+import PlatformApp from "./platform/PlatformApp";
 import { getMe, logout } from "./services/api";
 
 const NAV_ITEMS = [
@@ -176,7 +178,7 @@ function UserBadge({ user, onLoggedOut }) {
     <UserRound size={13} className="text-slate-500" />
     <span className="font-medium">{user.name}</span>
     <span className="text-slate-600">·</span>
-    <span className="text-slate-500">{user.role}</span>
+    <span className="text-slate-500">{user.realmName || user.role}</span>
     <button onClick={doLogout} disabled={busy} title="Sign out" className="ml-1 flex items-center gap-1 rounded-full border border-slate-700 px-2 py-1 text-[11px] text-slate-400 hover:bg-slate-800 hover:text-white disabled:opacity-50"><LogOut size={12} />{busy ? "…" : "Sign out"}</button>
   </div>;
 }
@@ -200,12 +202,26 @@ export default function App() {
     return <Login onLogin={setUser} />;
   }
 
+  // A platform admin with no active Enter Realm context gets the wholly
+  // separate Platform Command Center instead of the realm-user experience
+  // below - see PlatformApp.jsx. Once they Enter a realm, user.enteredRealm
+  // is set on their next /auth/me refresh and they fall through to the
+  // normal tree with the banner prepended, reusing every existing
+  // component as-is (the backend already scopes their requests via the
+  // Enter Realm context cookie).
+  if (user.platformRole && !user.enteredRealm) {
+    return <PlatformApp user={user} onLoggedOut={() => setUser(null)} />;
+  }
+
   return <>
-    <UserBadge user={user} onLoggedOut={() => setUser(null)} />
-    <NocDashboard user={user} />
-    <NavigationBridge />
-    <RootCauseCenter />
-    <TopologyErrorBoundary><TopologyView /></TopologyErrorBoundary>
-    <Phase4CommandCenter />
+    {user.enteredRealm && <EnterRealmBanner realmName={user.enteredRealm.realmName} />}
+    <div className={user.enteredRealm ? "pt-9" : ""}>
+      <UserBadge user={user} onLoggedOut={() => setUser(null)} />
+      <NocDashboard user={user} />
+      <NavigationBridge />
+      <RootCauseCenter />
+      <TopologyErrorBoundary><TopologyView /></TopologyErrorBoundary>
+      <Phase4CommandCenter />
+    </div>
   </>;
 }

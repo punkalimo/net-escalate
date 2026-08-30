@@ -8,6 +8,7 @@ import { mergeDownstream, computeBlastRadius } from "../services/blastRadiusServ
 import { computeRecommendedActions } from "../services/recommendedActionsService.js";
 import { computeRemediationCatalog, simulateRemediation } from "../services/remediationService.js";
 import { requireLevel } from "../middleware/authMiddleware.js";
+import { emitToRealm } from "../services/realtimeService.js";
 import { findSimilarIncidents } from "../services/historicalMatchService.js";
 import { findPossibleChangeCause } from "../services/changeCorrelationService.js";
 import { buildTimelineEvent, pushTimelineEvent } from "../services/timelineService.js";
@@ -20,6 +21,10 @@ function generateRemediationActionId() {
 }
 
 async function generateUniqueIncidentId() {
+  // incidentId (e.g. NET-1234) is intentionally globally unique across every
+  // realm, not per-realm - unlike Device.ipAddress, there's no reason two
+  // tenants would ever need the same incident id, and a shared id namespace
+  // makes cross-referencing (support, logs) unambiguous.
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const incidentId = `NET-${Math.floor(1000 + Math.random() * 9000)}`;
     const exists = await Incident.exists({ incidentId });
@@ -43,6 +48,7 @@ export default function incidentRoutes(io) {
         try {
           incident = await Incident.create({
             incidentId: await generateUniqueIncidentId(),
+            realmId: req.realmId,
             device,
             location,
             severity,
@@ -57,7 +63,7 @@ export default function incidentRoutes(io) {
         }
       }
 
-      if (io) io.emit("incident_created", incident);
+      if (io) emitToRealm(req.realmId, "incident_created", incident);
       processIncident(incident, io).catch(error => console.error("Escalation workflow error:", error));
 
       return res.status(201).json({ success: true, message: "Incident created and escalation workflow started.", incident });
@@ -71,7 +77,7 @@ export default function incidentRoutes(io) {
     try {
       const limit = Math.min(Math.max(Number.parseInt(req.query.limit || "500", 10) || 500, 1), 2000);
       const skip = Math.max(Number.parseInt(req.query.skip || "0", 10) || 0, 0);
-      const filter = {};
+      const filter = { realmId: req.realmId };
       if (req.query.status && req.query.status !== "ALL") filter.status = req.query.status === "ACTIVE" ? { $ne: "RESOLVED" } : req.query.status;
       if (req.query.severity && req.query.severity !== "ALL") filter.severity = req.query.severity;
       if (req.query.device && req.query.device !== "ALL") filter.device = req.query.device;
@@ -88,7 +94,7 @@ export default function incidentRoutes(io) {
       let correlation = null;
       if (req.query.includeCorrelation === "true") {
         try {
-          correlation = await correlateActiveIncidents({ forceTopology: req.query.refresh === "true" });
+          correlation = await correlateActiveIncidents({ realmId: req.realmId, forceTopology: req.query.refresh === "true" });
         } catch (correlationError) {
           console.warn("INCIDENT CORRELATION WARNING:", correlationError.message);
         }
@@ -108,7 +114,7 @@ export default function incidentRoutes(io) {
 
   router.get("/overview", async (req, res) => {
     try {
-      return res.json({ success: true, overview: await computeIncidentOverview() });
+      return res.json({ success: true, overview: await computeIncidentOverview({ realmId: req.realmId }) });
     } catch (error) {
       console.error("INCIDENT OVERVIEW ERROR:", error);
       return res.status(500).json({ success: false, message: "Failed to compute incident overview.", error: error.message });
@@ -117,8 +123,8 @@ export default function incidentRoutes(io) {
 
   router.get("/correlation", async (req, res) => {
     try {
-      const result = await correlateActiveIncidents({ forceTopology: req.query.refresh === "true" });
-      if (io) io.emit("incident_correlation_updated", result);
+      const result = await correlateActiveIncidents({ realmId: req.realmId, forceTopology: req.query.refresh === "true" });
+      if (io) emitToRealm(req.realmId, "incident_correlation_updated", result);
       return res.json(result);
     } catch (error) {
       console.error("INCIDENT CORRELATION ERROR:", error);
@@ -128,8 +134,8 @@ export default function incidentRoutes(io) {
 
   router.post("/correlation/rebuild", async (req, res) => {
     try {
-      const result = await correlateActiveIncidents({ forceTopology: true });
-      if (io) io.emit("incident_correlation_updated", result);
+      const result = await correlateActiveIncidents({ realmId: req.realmId, forceTopology: true });
+      if (io) emitToRealm(req.realmId, "incident_correlation_updated", result);
       return res.json(result);
     } catch (error) {
       console.error("INCIDENT CORRELATION REBUILD ERROR:", error);
@@ -144,8 +150,8 @@ export default function incidentRoutes(io) {
       if (intoIncidentId === req.params.incidentId) return res.status(400).json({ success: false, message: "Cannot merge an incident into itself." });
 
       const [source, target] = await Promise.all([
-        Incident.findOne({ incidentId: req.params.incidentId }),
-        Incident.findOne({ incidentId: intoIncidentId })
+        Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId }),
+        Incident.findOne({ incidentId: intoIncidentId, realmId: req.realmId })
       ]);
       if (!source || !target) return res.status(404).json({ success: false, message: "Incident not found." });
       if (source.status === "RESOLVED" || target.status === "RESOLVED") {
@@ -163,7 +169,7 @@ export default function incidentRoutes(io) {
       // If the source is itself a root with existing children, cascade them
       // into the new group too rather than leaving them orphaned.
       const cascaded = source.correlationRole === "ROOT" && source.correlationGroupId
-        ? await Incident.find({ correlationGroupId: source.correlationGroupId, correlationRole: "CHILD" })
+        ? await Incident.find({ realmId: req.realmId, correlationGroupId: source.correlationGroupId, correlationRole: "CHILD" })
         : [];
 
       target.correlationGroupId = groupId;
@@ -188,13 +194,13 @@ export default function incidentRoutes(io) {
         child.correlationManual = true;
         pushTimelineEvent(child, "MERGED", `Carried along into ${target.incidentId}'s group when ${source.incidentId} (its previous root) was merged.`, { actor: "NOC engineer" });
         await child.save();
-        if (io) io.emit("incident_updated", child);
+        if (io) emitToRealm(req.realmId, "incident_updated", child);
       }
 
-      if (io) { io.emit("incident_updated", target); io.emit("incident_updated", source); }
+      if (io) { emitToRealm(req.realmId, "incident_updated", target); emitToRealm(req.realmId, "incident_updated", source); }
 
-      const correlation = await correlateActiveIncidents();
-      if (io) io.emit("incident_correlation_updated", correlation);
+      const correlation = await correlateActiveIncidents({ realmId: req.realmId });
+      if (io) emitToRealm(req.realmId, "incident_correlation_updated", correlation);
       return res.json({ success: true, target: target.toObject(), source: source.toObject(), correlation });
     } catch (error) {
       console.error("MERGE INCIDENT ERROR:", error);
@@ -204,7 +210,7 @@ export default function incidentRoutes(io) {
 
   router.post("/:incidentId/unmerge", async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId });
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
       if (incident.status === "RESOLVED") {
         return res.status(409).json({ success: false, code: "CANNOT_UNMERGE_RESOLVED_INCIDENT", message: "Resolved incidents cannot be unmerged." });
@@ -222,10 +228,10 @@ export default function incidentRoutes(io) {
       incident.correlationManual = true;
       pushTimelineEvent(incident, "UNMERGED", `Manually unmerged from root incident ${previousParent}.`, { actor: "NOC engineer" });
       await incident.save();
-      if (io) io.emit("incident_updated", incident);
+      if (io) emitToRealm(req.realmId, "incident_updated", incident);
 
-      const correlation = await correlateActiveIncidents();
-      if (io) io.emit("incident_correlation_updated", correlation);
+      const correlation = await correlateActiveIncidents({ realmId: req.realmId });
+      if (io) emitToRealm(req.realmId, "incident_correlation_updated", correlation);
       return res.json({ success: true, incident: incident.toObject(), correlation });
     } catch (error) {
       console.error("UNMERGE INCIDENT ERROR:", error);
@@ -239,12 +245,12 @@ export default function incidentRoutes(io) {
       const actor = String(req.body?.actor || "NOC engineer").trim() || "NOC engineer";
       if (!message) return res.status(400).json({ success: false, message: "Comment message is required." });
 
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId });
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
 
       pushTimelineEvent(incident, "ENGINEER_COMMENT", message, { actor });
       await incident.save();
-      if (io) io.emit("incident_updated", incident);
+      if (io) emitToRealm(req.realmId, "incident_updated", incident);
       return res.json({ success: true, incident: incident.toObject() });
     } catch (error) {
       console.error("INCIDENT COMMENT ERROR:", error);
@@ -254,7 +260,7 @@ export default function incidentRoutes(io) {
 
   router.get("/:incidentId/sla", async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId }).lean();
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
       return res.json({ success: true, sla: computeSlaStatus(incident, { maxLevel: MAX_LEVEL }) });
     } catch (error) {
@@ -265,16 +271,16 @@ export default function incidentRoutes(io) {
 
   router.get("/:incidentId/recommended-actions", async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId }).lean();
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
 
-      const devices = await Device.find({}).lean();
+      const devices = await Device.find({ realmId: req.realmId }).lean();
       const deviceById = new Map(devices.map(d => [d.deviceId, d]));
       const device = devices.find(d => incidentDeviceMatches(incident, d)) || null;
 
       let childRefs = [];
       if (incident.correlationRole === "ROOT" && incident.correlationGroupId) {
-        const childDocs = await Incident.find({ correlationGroupId: incident.correlationGroupId, correlationRole: "CHILD" }).select("device interfaceName createdAt").lean();
+        const childDocs = await Incident.find({ realmId: req.realmId, correlationGroupId: incident.correlationGroupId, correlationRole: "CHILD" }).select("device interfaceName createdAt").lean();
         childRefs = childDocs.map(child => {
           const childDevice = devices.find(d => incidentDeviceMatches(child, d)) || null;
           return { deviceId: childDevice?.deviceId || null, hostname: childDevice?.hostname || child.device, interfaceName: child.interfaceName, createdAt: child.createdAt };
@@ -292,10 +298,10 @@ export default function incidentRoutes(io) {
 
   router.get("/:incidentId/remediation-catalog", async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId }).lean();
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
 
-      const devices = await Device.find({}).lean();
+      const devices = await Device.find({ realmId: req.realmId }).lean();
       const device = devices.find(d => incidentDeviceMatches(incident, d)) || null;
 
       return res.json({ success: true, remediationCatalog: computeRemediationCatalog(incident, { device }) });
@@ -312,7 +318,7 @@ export default function incidentRoutes(io) {
       const riskLevel = ["low", "medium", "high"].includes(req.body?.riskLevel) ? req.body.riskLevel : "low";
       if (!actionType || !label) return res.status(400).json({ success: false, message: "actionType and label are required." });
 
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId });
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
       if (incident.status === "RESOLVED") return res.status(409).json({ success: false, message: "Cannot propose remediation on a resolved incident." });
 
@@ -320,7 +326,7 @@ export default function incidentRoutes(io) {
       incident.remediationActions.push(action);
       pushTimelineEvent(incident, "REMEDIATION_PROPOSED", `Proposed remediation: ${label}.`, { actor: "NOC engineer" });
       await incident.save();
-      if (io) io.emit("incident_updated", incident);
+      if (io) emitToRealm(req.realmId, "incident_updated", incident);
       return res.status(201).json({ success: true, incident: incident.toObject() });
     } catch (error) {
       console.error("PROPOSE REMEDIATION ERROR:", error);
@@ -330,7 +336,7 @@ export default function incidentRoutes(io) {
 
   router.post("/:incidentId/remediation/:actionId/approve", requireLevel(2), async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId });
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
       const action = incident.remediationActions.find(a => a.actionId === req.params.actionId);
       if (!action) return res.status(404).json({ success: false, message: "Remediation action not found." });
@@ -341,7 +347,7 @@ export default function incidentRoutes(io) {
       action.decidedAt = new Date();
       pushTimelineEvent(incident, "REMEDIATION_APPROVED", `Approved remediation: ${action.label}.`, { actor: "NOC engineer" });
       await incident.save();
-      if (io) io.emit("incident_updated", incident);
+      if (io) emitToRealm(req.realmId, "incident_updated", incident);
       return res.json({ success: true, incident: incident.toObject() });
     } catch (error) {
       console.error("APPROVE REMEDIATION ERROR:", error);
@@ -351,7 +357,7 @@ export default function incidentRoutes(io) {
 
   router.post("/:incidentId/remediation/:actionId/reject", async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId });
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
       const action = incident.remediationActions.find(a => a.actionId === req.params.actionId);
       if (!action) return res.status(404).json({ success: false, message: "Remediation action not found." });
@@ -364,7 +370,7 @@ export default function incidentRoutes(io) {
       action.rejectionReason = reason || null;
       pushTimelineEvent(incident, "REMEDIATION_REJECTED", reason ? `Rejected remediation: ${action.label}. Reason: ${reason}` : `Rejected remediation: ${action.label}.`, { actor: "NOC engineer" });
       await incident.save();
-      if (io) io.emit("incident_updated", incident);
+      if (io) emitToRealm(req.realmId, "incident_updated", incident);
       return res.json({ success: true, incident: incident.toObject() });
     } catch (error) {
       console.error("REJECT REMEDIATION ERROR:", error);
@@ -374,7 +380,7 @@ export default function incidentRoutes(io) {
 
   router.post("/:incidentId/remediation/:actionId/execute", requireLevel(2), async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId });
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
       const action = incident.remediationActions.find(a => a.actionId === req.params.actionId);
       if (!action) return res.status(404).json({ success: false, message: "Remediation action not found." });
@@ -384,7 +390,7 @@ export default function incidentRoutes(io) {
       action.startedAt = new Date();
       pushTimelineEvent(incident, "REMEDIATION_STARTED", `Running remediation (simulated): ${action.label}.`, { actor: "NOC engineer" });
       await incident.save();
-      if (io) io.emit("incident_updated", incident);
+      if (io) emitToRealm(req.realmId, "incident_updated", incident);
 
       const { succeeded, message } = await simulateRemediation(action.actionType);
 
@@ -393,7 +399,7 @@ export default function incidentRoutes(io) {
       action.result = message;
       pushTimelineEvent(incident, succeeded ? "REMEDIATION_SUCCEEDED" : "REMEDIATION_FAILED", message, { actor: "system" });
       await incident.save();
-      if (io) io.emit("incident_updated", incident);
+      if (io) emitToRealm(req.realmId, "incident_updated", incident);
 
       return res.json({ success: true, incident: incident.toObject() });
     } catch (error) {
@@ -404,7 +410,7 @@ export default function incidentRoutes(io) {
 
   router.get("/:incidentId/similar-incidents", async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId }).lean();
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
       return res.json({ success: true, similarIncidents: await findSimilarIncidents(incident) });
     } catch (error) {
@@ -415,7 +421,7 @@ export default function incidentRoutes(io) {
 
   router.get("/:incidentId/change-correlation", async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId }).lean();
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
       return res.json({ success: true, changeCorrelation: await findPossibleChangeCause(incident) });
     } catch (error) {
@@ -426,15 +432,15 @@ export default function incidentRoutes(io) {
 
   router.get("/:incidentId/root-cause", async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId }).lean();
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
 
-      const devices = await Device.find({}).lean();
+      const devices = await Device.find({ realmId: req.realmId }).lean();
       const device = devices.find(d => incidentDeviceMatches(incident, d)) || null;
 
       let children = [];
       if (incident.correlationRole === "ROOT" && incident.correlationGroupId) {
-        const childDocs = await Incident.find({ correlationGroupId: incident.correlationGroupId, correlationRole: "CHILD" }).select("device interfaceName createdAt").lean();
+        const childDocs = await Incident.find({ realmId: req.realmId, correlationGroupId: incident.correlationGroupId, correlationRole: "CHILD" }).select("device interfaceName createdAt").lean();
         children = childDocs.map(child => ({ hostname: child.device, interfaceName: child.interfaceName, createdAt: child.createdAt }));
       }
 
@@ -447,16 +453,16 @@ export default function incidentRoutes(io) {
 
   router.get("/:incidentId/blast-radius", async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId }).lean();
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
 
-      const devices = await Device.find({}).lean();
+      const devices = await Device.find({ realmId: req.realmId }).lean();
       const deviceById = new Map(devices.map(d => [d.deviceId, d]));
       const rootDevice = devices.find(d => incidentDeviceMatches(incident, d)) || null;
 
       let childRefs = [];
       if (incident.correlationRole === "ROOT" && incident.correlationGroupId) {
-        const childDocs = await Incident.find({ correlationGroupId: incident.correlationGroupId, correlationRole: "CHILD" }).select("device interfaceName createdAt").lean();
+        const childDocs = await Incident.find({ realmId: req.realmId, correlationGroupId: incident.correlationGroupId, correlationRole: "CHILD" }).select("device interfaceName createdAt").lean();
         childRefs = childDocs.map(child => {
           const childDevice = devices.find(d => incidentDeviceMatches(child, d)) || null;
           return { deviceId: childDevice?.deviceId || null, hostname: childDevice?.hostname || child.device, interfaceName: child.interfaceName, createdAt: child.createdAt };
@@ -473,7 +479,7 @@ export default function incidentRoutes(io) {
 
   router.get("/:incidentId", async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean().exec();
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId }).lean().exec();
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
       return res.json({ success: true, incident });
     } catch (error) {
@@ -484,7 +490,7 @@ export default function incidentRoutes(io) {
 
   router.post("/:incidentId/escalate", async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId });
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
       if (incident.status === "RESOLVED") return res.status(409).json({ success: false, message: "Resolved incidents cannot be escalated." });
       if (incident.escalationLevel >= MAX_LEVEL) return res.status(409).json({ success: false, message: `Already at the highest escalation level (${MAX_LEVEL}).` });
@@ -494,7 +500,7 @@ export default function incidentRoutes(io) {
       incident.escalationLevel = nextLevel;
       incident.status = "ESCALATING";
       await incident.save();
-      if (io) io.emit("incident_updated", incident);
+      if (io) emitToRealm(req.realmId, "incident_updated", incident);
 
       processIncident(incident, io).catch(error => console.error(`Manual escalation processing error for ${incident.incidentId}:`, error));
       return res.json({ success: true, incident: incident.toObject() });
@@ -506,7 +512,7 @@ export default function incidentRoutes(io) {
 
   router.post("/:incidentId/acknowledge", async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId });
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
       if (incident.status === "RESOLVED") return res.status(409).json({ success: false, message: "Resolved incidents cannot be acknowledged." });
       if (incident.status === "ACKNOWLEDGED") return res.status(409).json({ success: false, message: "Incident is already acknowledged." });
@@ -516,7 +522,7 @@ export default function incidentRoutes(io) {
       incident.acknowledgement = note || "Manually acknowledged by a NOC engineer.";
       pushTimelineEvent(incident, "INCIDENT_ACKNOWLEDGED", note ? `Manually acknowledged by a NOC engineer: ${note}` : "Manually acknowledged by a NOC engineer.", { actor: "NOC engineer" });
       await incident.save();
-      if (io) io.emit("incident_updated", incident);
+      if (io) emitToRealm(req.realmId, "incident_updated", incident);
       return res.json({ success: true, incident: incident.toObject() });
     } catch (error) {
       console.error("MANUAL ACKNOWLEDGE ERROR:", error);
@@ -526,11 +532,11 @@ export default function incidentRoutes(io) {
 
   router.get("/:incidentId/device-history", async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId }).lean();
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
 
       const filter = incident.deviceId ? { deviceId: incident.deviceId } : { device: incident.device };
-      const deviceHistory = await Incident.find({ ...filter, incidentId: { $ne: incident.incidentId } })
+      const deviceHistory = await Incident.find({ ...filter, realmId: req.realmId, incidentId: { $ne: incident.incidentId } })
         .sort({ createdAt: -1 })
         .limit(10)
         .select("incidentId status severity source description createdAt resolvedAt")
@@ -545,7 +551,7 @@ export default function incidentRoutes(io) {
 
   router.patch("/:incidentId/resolve", async (req, res) => {
     try {
-      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId });
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
 
       if (["DEVICE_MONITOR", "INTERFACE_HEALTH"].includes(incident.source)) {
@@ -563,7 +569,7 @@ export default function incidentRoutes(io) {
       if (resolutionNotes) incident.resolutionNotes = resolutionNotes;
       pushTimelineEvent(incident, "INCIDENT_RESOLVED", resolutionNotes ? `Incident manually resolved by a NOC engineer. Resolution: ${resolutionNotes}` : "Incident manually resolved by a NOC engineer.", { actor: "NOC engineer" });
       await incident.save();
-      if (io) io.emit("incident_updated", incident);
+      if (io) emitToRealm(req.realmId, "incident_updated", incident);
       return res.json({ success: true, incident });
     } catch (error) {
       console.error("RESOLVE INCIDENT ERROR:", error);

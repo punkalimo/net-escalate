@@ -5,7 +5,7 @@ const router = express.Router();
 
 router.get("/devices/:deviceId/path", async (req, res) => {
   try {
-    const result = await discoverDevicePath(req.params.deviceId);
+    const result = await discoverDevicePath(req.params.deviceId, req.realmId);
     return res.status(result.status || 200).json(result);
   } catch (error) {
     console.error("DEVICE PATH DISCOVERY ERROR:", error);
@@ -15,7 +15,7 @@ router.get("/devices/:deviceId/path", async (req, res) => {
 
 router.post("/devices/:deviceId/path/discover", async (req, res) => {
   try {
-    const result = await discoverDevicePath(req.params.deviceId);
+    const result = await discoverDevicePath(req.params.deviceId, req.realmId);
     return res.status(result.status || 200).json(result);
   } catch (error) {
     console.error("DEVICE PATH DISCOVERY ERROR:", error);

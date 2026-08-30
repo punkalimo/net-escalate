@@ -29,13 +29,13 @@ export function average(values) {
   return values.length ? Math.round(values.reduce((total, value) => total + value, 0) / values.length) : null;
 }
 
-export async function computeIncidentOverview({ mttrWindowDays = DEFAULT_MTTR_WINDOW_DAYS, sampleLimit = SAMPLE_LIMIT } = {}) {
+export async function computeIncidentOverview({ realmId, mttrWindowDays = DEFAULT_MTTR_WINDOW_DAYS, sampleLimit = SAMPLE_LIMIT } = {}) {
   const since = new Date(Date.now() - mttrWindowDays * 24 * 3600 * 1000);
 
   const [activeCount, active, recentResolved] = await Promise.all([
-    Incident.countDocuments({ status: { $in: ACTIVE_STATUSES } }),
-    Incident.find({ status: { $in: ACTIVE_STATUSES } }).sort({ createdAt: -1 }).limit(sampleLimit).lean(),
-    Incident.find({ status: "RESOLVED", resolvedAt: { $gte: since } }).sort({ resolvedAt: -1 }).limit(sampleLimit).lean()
+    Incident.countDocuments({ realmId, status: { $in: ACTIVE_STATUSES } }),
+    Incident.find({ realmId, status: { $in: ACTIVE_STATUSES } }).sort({ createdAt: -1 }).limit(sampleLimit).lean(),
+    Incident.find({ realmId, status: "RESOLVED", resolvedAt: { $gte: since } }).sort({ resolvedAt: -1 }).limit(sampleLimit).lean()
   ]);
   const sampled = activeCount > active.length;
 

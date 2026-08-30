@@ -1,15 +1,20 @@
 import Incident from "../models/Incident.js";
 import Device from "../models/Device.js";
+import Realm from "../models/Realm.js";
 import { discoverTopology } from "./topologyService.js";
 import { computeRootCause } from "./rootCauseService.js";
 import { mergeDownstream, computeBlastRadius } from "./blastRadiusService.js";
 import { pushTimelineEvent } from "./timelineService.js";
+import { emitToRealm } from "./realtimeService.js";
 
 const MAX_CORRELATION_HOPS = 3;
 const ACTIVE_STATUSES = new Set(["OPEN", "CALLING", "ACKNOWLEDGED", "ESCALATING", "FAILED"]);
 const severityRank = { critical: 0, high: 1, medium: 2, low: 3 };
 
-let topologyCache = { value: null, expiresAt: 0 };
+// Keyed per-realm - a single shared cache would let one realm's correlation
+// pass match against another realm's topology edges (a real cross-tenant
+// leak, not just a performance detail).
+const topologyCacheByRealm = new Map();
 
 function normalize(value) {
   return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -25,11 +30,13 @@ export function incidentDeviceMatches(incident, device) {
   return Boolean(target && candidates.some(candidate => candidate === target || candidate.includes(target) || target.includes(candidate)));
 }
 
-async function getTopologyCached(force = false) {
+async function getTopologyCached(realmId, force = false) {
+  const key = String(realmId);
   const now = Date.now();
-  if (!force && topologyCache.value && topologyCache.expiresAt > now) return topologyCache.value;
-  const topology = await discoverTopology();
-  topologyCache = { value: topology, expiresAt: now + 30_000 };
+  const cached = topologyCacheByRealm.get(key);
+  if (!force && cached?.value && cached.expiresAt > now) return cached.value;
+  const topology = await discoverTopology(realmId);
+  topologyCacheByRealm.set(key, { value: topology, expiresAt: now + 30_000 });
   return topology;
 }
 
@@ -170,8 +177,8 @@ function buildManualGroups(incidents, devices = []) {
   return groups;
 }
 
-async function runCorrelation({ forceTopology = false } = {}) {
-  const incidents = await Incident.find({ status: { $in: [...ACTIVE_STATUSES] } }).sort({ createdAt: 1 }).exec();
+async function runCorrelation({ realmId, forceTopology = false } = {}) {
+  const incidents = await Incident.find({ realmId, status: { $in: [...ACTIVE_STATUSES] } }).sort({ createdAt: 1 }).exec();
 
   // Nothing to correlate with 0-1 active incidents - skip the SNMP-based
   // topology discovery entirely so an idle network never pays for it, and
@@ -179,7 +186,7 @@ async function runCorrelation({ forceTopology = false } = {}) {
   // browsing the Topology page.
   if (incidents.length < 2) {
     for (const incident of incidents) await resetStandaloneIfNeeded(incident);
-    const devices = incidents.length ? await Device.find({}).lean().exec() : [];
+    const devices = incidents.length ? await Device.find({ realmId }).lean().exec() : [];
     const manualGroups = buildManualGroups(incidents, devices);
     return {
       success: true, generatedAt: new Date().toISOString(), topologyGeneratedAt: null,
@@ -189,9 +196,9 @@ async function runCorrelation({ forceTopology = false } = {}) {
     };
   }
 
-  const devices = await Device.find({}).lean().exec();
+  const devices = await Device.find({ realmId }).lean().exec();
   const deviceById = new Map(devices.map(device => [device.deviceId, device]));
-  const topology = await getTopologyCached(forceTopology);
+  const topology = await getTopologyCached(realmId, forceTopology);
   const graph = buildGraph(topology?.edges || []);
   const deviceByIncident = new Map();
 
@@ -293,29 +300,55 @@ async function runCorrelation({ forceTopology = false } = {}) {
 // Concurrency guard: the sweep timer below and up to 4 existing manual call
 // sites (incidentRoutes.js, phase4Routes.js) can now overlap in time. Without
 // this memo, two concurrent runs could both load the same Incident docs and
-// race their .save() calls into a Mongoose version-conflict error. Every
-// caller during an in-flight run gets the same promise/result instead of
-// starting a second pass.
-let inFlight = null;
+// race their .save() calls into a Mongoose version-conflict error. Keyed per
+// realm - a single shared guard would make Realm A's request await (and
+// receive!) Realm B's in-flight correlation result, a cross-tenant leak, not
+// just a missed-dedup performance detail.
+const inFlightByRealm = new Map();
 
 export async function correlateActiveIncidents(opts = {}) {
-  if (inFlight) return inFlight;
-  inFlight = runCorrelation(opts).finally(() => { inFlight = null; });
-  return inFlight;
+  const key = String(opts.realmId);
+  const existing = inFlightByRealm.get(key);
+  if (existing) return existing;
+  const promise = runCorrelation(opts).finally(() => { inFlightByRealm.delete(key); });
+  inFlightByRealm.set(key, promise);
+  return promise;
 }
 
-export function invalidateIncidentCorrelationTopologyCache() {
-  topologyCache = { value: null, expiresAt: 0 };
+export function invalidateIncidentCorrelationTopologyCache(realmId) {
+  if (realmId) topologyCacheByRealm.delete(String(realmId));
+  else topologyCacheByRealm.clear();
+}
+
+// Runs correlation once per active Realm, sequentially - used only by the
+// sweep timer below. Route handlers call correlateActiveIncidents directly
+// with the caller's own realmId instead (they already know which realm they're
+// scoped to; looping over every realm on every request would be both wrong
+// - a realm user must never trigger correlation work on another realm - and
+// wasteful).
+async function correlateAllRealms() {
+  const realms = await Realm.find({ status: "active" }).select("_id").lean();
+  for (const realm of realms) {
+    try {
+      const result = await correlateActiveIncidents({ realmId: realm._id });
+      if (global.io) emitToRealm(realm._id, "incident_correlation_updated", result);
+    } catch (error) {
+      console.error(`[CORRELATION SWEEP] Failed for realm ${realm._id}: ${error.message}`);
+    }
+  }
 }
 
 let sweepTimer = null;
+let sweepRunning = false;
 
 export function startIncidentCorrelationSweep(intervalSeconds = 90) {
   stopIncidentCorrelationSweep();
   sweepTimer = setInterval(() => {
-    correlateActiveIncidents()
-      .then(result => { if (global.io) global.io.emit("incident_correlation_updated", result); })
-      .catch(error => console.error(`[CORRELATION SWEEP] Failed: ${error.message}`));
+    if (sweepRunning) return;
+    sweepRunning = true;
+    correlateAllRealms()
+      .catch(error => console.error(`[CORRELATION SWEEP] Failed: ${error.message}`))
+      .finally(() => { sweepRunning = false; });
   }, intervalSeconds * 1000);
   console.log(`[CORRELATION SWEEP] Started, every ${intervalSeconds}s`);
 }

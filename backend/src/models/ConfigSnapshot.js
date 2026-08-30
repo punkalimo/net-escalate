@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 const configSnapshotSchema = new mongoose.Schema(
   {
     deviceId: { type: String, required: true, index: true },
+    realmId: { type: mongoose.Schema.Types.ObjectId, ref: "Realm", required: true, index: true },
     hostname: { type: String, default: "" },
     source: { type: String, enum: ["SNMP", "DEVICE", "MANUAL"], default: "DEVICE" },
     fingerprint: { type: String, required: true },
@@ -16,5 +17,6 @@ const configSnapshotSchema = new mongoose.Schema(
 
 configSnapshotSchema.index({ deviceId: 1, capturedAt: -1 });
 configSnapshotSchema.index({ deviceId: 1, fingerprint: 1 });
+configSnapshotSchema.index({ realmId: 1, deviceId: 1, capturedAt: -1 });
 
 export default mongoose.models.ConfigSnapshot || mongoose.model("ConfigSnapshot", configSnapshotSchema);

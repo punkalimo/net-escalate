@@ -1,6 +1,8 @@
 import Incident from "../models/Incident.js";
 import Device from "../models/Device.js";
+import Realm from "../models/Realm.js";
 import { buildTimelineEvent } from "./timelineService.js";
+import { emitToRealm } from "./realtimeService.js";
 
 const ACTIVE_INCIDENT_STATUSES = ["OPEN", "CALLING", "ACKNOWLEDGED", "ESCALATING", "FAILED"];
 
@@ -71,15 +73,15 @@ let sweepTimer = null;
 // touching that specific incident: impactedDeviceCount can grow as other
 // devices attach to an already-open incident, and activeMinutes advances
 // purely with wall-clock time.
-export async function sweepActiveIncidentSeverity() {
-  const incidents = await Incident.find({ status: { $in: ACTIVE_INCIDENT_STATUSES } })
+export async function sweepActiveIncidentSeverity(realmId) {
+  const incidents = await Incident.find({ realmId, status: { $in: ACTIVE_INCIDENT_STATUSES } })
     .select("incidentId deviceId severity impactedDevices createdAt correlationGroupId correlationRole interfaceName")
     .lean();
 
   if (!incidents.length) return { checked: 0, updated: 0 };
 
   const deviceIds = [...new Set(incidents.map(incident => incident.deviceId).filter(Boolean))];
-  const devices = await Device.find({ deviceId: { $in: deviceIds } }).select("deviceId role location alertThresholds.severityEscalationMinutes").lean();
+  const devices = await Device.find({ realmId, deviceId: { $in: deviceIds } }).select("deviceId role location alertThresholds.severityEscalationMinutes").lean();
   const deviceById = new Map(devices.map(device => [device.deviceId, device]));
 
   // A root incident's correlated children count toward its blast radius too,
@@ -119,18 +121,32 @@ export async function sweepActiveIncidentSeverity() {
     if (nextSeverity === incident.severity) continue;
 
     const result = await Incident.findOneAndUpdate(
-      { incidentId: incident.incidentId, status: { $in: ACTIVE_INCIDENT_STATUSES } },
+      { incidentId: incident.incidentId, realmId, status: { $in: ACTIVE_INCIDENT_STATUSES } },
       { $set: { severity: nextSeverity, severityReasons: reasons }, $push: { timeline: buildTimelineEvent("SEVERITY_CHANGED", `Severity escalated from ${incident.severity} to ${nextSeverity}. ${reasons[reasons.length - 1]}`, { actor: "severity engine" }) } },
       { new: true }
     );
 
     if (result) {
       updated += 1;
-      if (global.io) global.io.emit("incident_updated", result);
+      if (global.io) emitToRealm(realmId, "incident_updated", result);
     }
   }
 
   return { checked: incidents.length, updated };
+}
+
+async function sweepAllRealms() {
+  const realms = await Realm.find({ status: "active" }).select("_id").lean();
+  let checked = 0, updated = 0;
+  for (const realm of realms) {
+    try {
+      const result = await sweepActiveIncidentSeverity(realm._id);
+      checked += result.checked; updated += result.updated;
+    } catch (error) {
+      console.error(`[SEVERITY SWEEP] Failed for realm ${realm._id}: ${error.message}`);
+    }
+  }
+  return { checked, updated };
 }
 
 // Same overlap guard as escalationSweepService.js: skip a tick entirely if
@@ -143,7 +159,7 @@ export function startSeverityEscalationSweep(intervalSeconds = 60) {
   sweepTimer = setInterval(() => {
     if (sweepRunning) return;
     sweepRunning = true;
-    sweepActiveIncidentSeverity()
+    sweepAllRealms()
       .catch(error => console.error(`[SEVERITY SWEEP] Failed: ${error.message}`))
       .finally(() => { sweepRunning = false; });
   }, intervalSeconds * 1000);

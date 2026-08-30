@@ -6,6 +6,16 @@ const TOKEN_TTL_SECONDS = 12 * 60 * 60; // 12h - matches the cookie maxAge set o
 export const AUTH_COOKIE_NAME = "netescalate_token";
 export const AUTH_COOKIE_MAX_AGE_MS = TOKEN_TTL_SECONDS * 1000;
 
+// Enter Realm context - a SEPARATE, short-lived token/cookie from the main
+// identity token above. Deliberately not a re-issue of the identity JWT:
+// "who you are" (platform admin) and "what realm you're currently viewing"
+// are independent, so exiting a realm never requires logging back in, and
+// the identity token's own 12h expiry is unaffected by how long a support
+// session lasts.
+const REALM_CONTEXT_TTL_SECONDS = 2 * 60 * 60; // 2h - a support session shouldn't silently linger all day.
+export const REALM_CONTEXT_COOKIE_NAME = "netescalate_realm_context";
+export const REALM_CONTEXT_COOKIE_MAX_AGE_MS = REALM_CONTEXT_TTL_SECONDS * 1000;
+
 if (!JWT_SECRET) {
   throw new Error("JWT_SECRET is not configured. Set it in backend/.env before starting the server.");
 }
@@ -20,10 +30,22 @@ export async function verifyPassword(password, passwordHash) {
 }
 
 // Payload deliberately excludes phone/passwordHash - only what routes/UI
-// need to identify and authorize the caller.
-export function signAuthToken(technician) {
+// need to identify and authorize the caller. realmId/realmRole are only
+// present for a normal realm technician; platformRole is only present for a
+// platform-level operator (realmId is null for them - see Technician.js).
+export function signAuthToken(technician, { realmName = null } = {}) {
   return jwt.sign(
-    { technicianId: technician.technicianId, username: technician.username, name: technician.name, role: technician.role, level: technician.level },
+    {
+      technicianId: technician.technicianId,
+      username: technician.username,
+      name: technician.name,
+      role: technician.role,
+      level: technician.level,
+      realmId: technician.realmId ? String(technician.realmId) : null,
+      realmName,
+      realmRole: technician.realmRole || null,
+      platformRole: technician.platformRole || null
+    },
     JWT_SECRET,
     { expiresIn: TOKEN_TTL_SECONDS }
   );
@@ -33,4 +55,15 @@ export function verifyAuthToken(token) {
   return jwt.verify(token, JWT_SECRET);
 }
 
-export default { hashPassword, verifyPassword, signAuthToken, verifyAuthToken, AUTH_COOKIE_NAME, AUTH_COOKIE_MAX_AGE_MS };
+export function signRealmContext({ realmId, realmName, enteredBy }) {
+  return jwt.sign({ realmId: String(realmId), realmName, enteredBy, enteredAt: new Date().toISOString() }, JWT_SECRET, { expiresIn: REALM_CONTEXT_TTL_SECONDS });
+}
+
+export function verifyRealmContext(token) {
+  return jwt.verify(token, JWT_SECRET);
+}
+
+export default {
+  hashPassword, verifyPassword, signAuthToken, verifyAuthToken, AUTH_COOKIE_NAME, AUTH_COOKIE_MAX_AGE_MS,
+  signRealmContext, verifyRealmContext, REALM_CONTEXT_COOKIE_NAME, REALM_CONTEXT_COOKIE_MAX_AGE_MS
+};

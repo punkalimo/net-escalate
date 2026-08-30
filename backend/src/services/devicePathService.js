@@ -111,8 +111,8 @@ async function nmapTarget(target) {
   return { ...serviceScan, fingerprintMode: "services-only", fallbackReason: "OS fingerprinting requires elevated privileges; service detection was used instead." };
 }
 
-export async function discoverDevicePath(deviceId) {
-  const devices = await Device.find({}).lean().exec();
+export async function discoverDevicePath(deviceId, realmId) {
+  const devices = await Device.find({ realmId }).lean().exec();
   const device = devices.find(item => item.deviceId === deviceId);
   if (!device) return { success: false, status: 404, message: "Device not found." };
   if (!isSafeTarget(device.ipAddress)) return { success: false, status: 400, message: "Device has an invalid or unsupported IP/hostname." };

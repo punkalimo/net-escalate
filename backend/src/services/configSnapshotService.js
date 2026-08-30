@@ -48,11 +48,16 @@ export function configFields(device) {
 export async function captureSnapshot(device) {
   const config = configFields(device);
   const fp = fingerprint(config);
-  const previous = await ConfigSnapshot.findOne({ deviceId: device.deviceId }).sort({ capturedAt: -1 }).lean();
+  const previous = await ConfigSnapshot.findOne({ realmId: device.realmId, deviceId: device.deviceId }).sort({ capturedAt: -1 }).lean();
   const changes = previous && previous.fingerprint !== fp ? ["Configuration fingerprint changed", "Compare the latest interface, monitoring and port inventory"] : [];
-  return ConfigSnapshot.create({ deviceId: device.deviceId, hostname: device.hostname, fingerprint: fp, config, changed: Boolean(changes.length), changes });
+  return ConfigSnapshot.create({ realmId: device.realmId, deviceId: device.deviceId, hostname: device.hostname, fingerprint: fp, config, changed: Boolean(changes.length), changes });
 }
 
+// Scans every monitoring-enabled device across every realm, same "boot-scan"
+// pattern as deviceMonitoringService/interfaceMonitoringService's startup
+// scans - each individual captureSnapshot() call above is already correctly
+// tied to that one device's own realmId, so there's no cross-tenant
+// aggregation happening here to additionally scope.
 export async function sweepConfigSnapshots() {
   const devices = await Device.find({ monitoringEnabled: true }).lean();
   let captured = 0;

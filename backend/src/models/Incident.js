@@ -72,6 +72,7 @@ const remediationActionSchema = new mongoose.Schema(
 const incidentSchema = new mongoose.Schema(
   {
     incidentId: { type: String, unique: true, required: true },
+    realmId: { type: mongoose.Schema.Types.ObjectId, ref: "Realm", required: true, index: true },
     // Stable device identity for fast "does this device have an active
     // incident" lookups. `device` below stays the human-readable label
     // (hostname, or "hostname / ifName" for interface-scoped incidents) used
@@ -146,5 +147,15 @@ incidentSchema.index({ status: 1, severity: 1, createdAt: -1 });
 incidentSchema.index({ device: 1, status: 1, createdAt: -1 });
 incidentSchema.index({ source: 1, status: 1, createdAt: -1 });
 incidentSchema.index({ correlationGroupId: 1, correlationRole: 1 });
+
+// realmId-qualified equivalents of the hot-path indexes above - every route
+// and sweep now filters by realmId first, so these are what actually serve
+// those queries going forward; the un-prefixed indexes above are left in
+// place rather than dropped (harmless, and any not-yet-migrated code path
+// still benefits from them).
+incidentSchema.index({ realmId: 1, status: 1 });
+incidentSchema.index({ realmId: 1, deviceId: 1, status: 1 });
+incidentSchema.index({ realmId: 1, status: 1, createdAt: -1 });
+incidentSchema.index({ realmId: 1, status: 1, severity: 1, createdAt: -1 });
 
 export default mongoose.model("Incident", incidentSchema);

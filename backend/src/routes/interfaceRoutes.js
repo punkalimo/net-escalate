@@ -3,12 +3,13 @@ import Device from "../models/Device.js";
 import InterfaceSample from "../models/InterfaceSample.js";
 import { getInterfaceStatus, getInterfaceMetrics, testSnmpConnection } from "../services/snmpService.js";
 import { syncDeviceInterfacesAdmin, pollDeviceInterfaces } from "../services/interfaceMonitoringService.js";
+import { emitToRealm } from "../services/realtimeService.js";
 
 const router = express.Router();
 
 router.post("/:deviceId/discover", async (req, res) => {
   try {
-    const device = await Device.findOne({ deviceId: req.params.deviceId });
+    const device = await Device.findOne({ deviceId: req.params.deviceId, realmId: req.realmId });
     if (!device) return res.status(404).json({ success: false, message: "Device not found." });
 
     if (device.snmp?.enabled === false) {
@@ -74,12 +75,12 @@ router.post("/:deviceId/discover", async (req, res) => {
 
 router.get("/:deviceId/history", async (req, res) => {
   try {
-    const device = await Device.findOne({ deviceId: req.params.deviceId }).lean();
+    const device = await Device.findOne({ deviceId: req.params.deviceId, realmId: req.realmId }).lean();
     if (!device) return res.status(404).json({ success: false, message: "Device not found." });
     const hours = Math.min(168, Math.max(1, Number(req.query.hours || 24)));
     const ifIndex = req.query.ifIndex == null ? null : Number(req.query.ifIndex);
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
-    const query = { deviceId: device.deviceId, sampledAt: { $gte: since } };
+    const query = { realmId: req.realmId, deviceId: device.deviceId, sampledAt: { $gte: since } };
     if (Number.isInteger(ifIndex) && ifIndex > 0) query.ifIndex = ifIndex;
     const samples = await InterfaceSample.find(query).sort({ sampledAt: 1 }).lean();
     return res.json({ success: true, deviceId: device.deviceId, hours, samples });
@@ -91,7 +92,7 @@ router.get("/:deviceId/history", async (req, res) => {
 
 router.get("/:deviceId", async (req, res) => {
   try {
-    const device = await Device.findOne({ deviceId: req.params.deviceId }).lean();
+    const device = await Device.findOne({ deviceId: req.params.deviceId, realmId: req.realmId }).lean();
     if (!device) return res.status(404).json({ success: false, message: "Device not found." });
     return res.json({ success: true, deviceId: device.deviceId, interfaces: device.interfaces || [] });
   } catch (error) {
@@ -102,7 +103,7 @@ router.get("/:deviceId", async (req, res) => {
 
 router.get("/:deviceId/:ifIndex/status", async (req, res) => {
   try {
-    const device = await Device.findOne({ deviceId: req.params.deviceId });
+    const device = await Device.findOne({ deviceId: req.params.deviceId, realmId: req.realmId });
     if (!device) return res.status(404).json({ success: false, message: "Device not found." });
     const ifIndex = Number(req.params.ifIndex);
     if (!Number.isInteger(ifIndex) || ifIndex < 1) return res.status(400).json({ success: false, message: "Invalid interface index." });
@@ -120,7 +121,7 @@ router.get("/:deviceId/:ifIndex/status", async (req, res) => {
 // interface (see upsertDiscoveredInterfaces).
 router.patch("/:deviceId/:ifIndex/monitored", async (req, res) => {
   try {
-    const device = await Device.findOne({ deviceId: req.params.deviceId });
+    const device = await Device.findOne({ deviceId: req.params.deviceId, realmId: req.realmId });
     if (!device) return res.status(404).json({ success: false, message: "Device not found." });
     const ifIndex = Number(req.params.ifIndex);
     if (!Number.isInteger(ifIndex) || ifIndex < 1) return res.status(400).json({ success: false, message: "Invalid interface index." });
@@ -131,7 +132,7 @@ router.patch("/:deviceId/:ifIndex/monitored", async (req, res) => {
 
     iface.monitored = req.body.monitored;
     await device.save();
-    if (global.io) global.io.emit("device_updated", device.toObject());
+    if (global.io) emitToRealm(req.realmId, "device_updated", device.toObject());
     return res.json({ success: true, deviceId: device.deviceId, ifIndex, monitored: iface.monitored });
   } catch (error) {
     console.error("INTERFACE MONITORED TOGGLE ERROR:", error);
@@ -141,7 +142,7 @@ router.patch("/:deviceId/:ifIndex/monitored", async (req, res) => {
 
 router.get("/:deviceId/:ifIndex/metrics", async (req, res) => {
   try {
-    const device = await Device.findOne({ deviceId: req.params.deviceId });
+    const device = await Device.findOne({ deviceId: req.params.deviceId, realmId: req.realmId });
     if (!device) return res.status(404).json({ success: false, message: "Device not found." });
     const ifIndex = Number(req.params.ifIndex);
     if (!Number.isInteger(ifIndex) || ifIndex < 1) return res.status(400).json({ success: false, message: "Invalid interface index." });

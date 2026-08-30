@@ -11,6 +11,7 @@ import Technician from "../models/Technician.js";
 import { processIncident } from "./incidentService.js";
 import { computeSeverityWithReasons } from "./severityService.js";
 import { buildTimelineEvent } from "./timelineService.js";
+import { emitToRealm } from "./realtimeService.js";
 
 const execAsync = promisify(exec);
 
@@ -26,13 +27,18 @@ export function setMonitoringSocket(io) {
     );
 }
 
-function emitMonitoringEvent(event, data) {
+// realmId is required, not optional - a bare monitoringIo.emit(...) here
+// would broadcast to every connected socket regardless of realm (this is
+// exactly what happened before this fix: every device poll, across every
+// realm, pushed device_updated/incident_updated to every browser tab).
+function emitMonitoringEvent(realmId, event, data) {
     if (!monitoringIo) {
         return;
     }
 
     try {
-        monitoringIo.emit(
+        emitToRealm(
+            realmId,
             event,
             data
         );
@@ -481,9 +487,12 @@ function determineStatus(result) {
     return "DOWN";
 }
 
-async function getInitialTechnician() {
+// realmId scoped: without it this would assign an automatic incident to
+// ANY realm's Level 1 technician, not just this device's own realm.
+async function getInitialTechnician(realmId) {
     return await Technician
         .findOne({
+            realmId,
             level: 1,
             active: true
         })
@@ -575,7 +584,8 @@ async function findNearestActiveAncestorIncident(
         const parentDevice =
             await Device.findOne({
                 deviceId:
-                    parentDeviceId
+                    parentDeviceId,
+                realmId: device.realmId
             });
 
         if (!parentDevice) {
@@ -649,6 +659,7 @@ async function attachToParentIncident(
         );
 
         emitMonitoringEvent(
+            parentIncident.realmId,
             "incident_updated",
             parentIncident
         );
@@ -660,7 +671,8 @@ async function attachToParentIncident(
 // Breadth-first walk down parentDeviceId (the reverse of the ancestor walk)
 // to find every descendant of a device, bounded and cycle-safe the same way.
 async function collectDescendantDevices(
-    rootDeviceId
+    rootDeviceId,
+    realmId
 ) {
     const descendants = [];
     const visited = new Set([
@@ -680,7 +692,8 @@ async function collectDescendantDevices(
             await Device.find({
                 parentDeviceId: {
                     $in: frontier
-                }
+                },
+                realmId
             });
 
         frontier = [];
@@ -729,7 +742,8 @@ async function adoptDescendantIncidents(
 ) {
     const descendants =
         await collectDescendantDevices(
-            device.deviceId
+            device.deviceId,
+            device.realmId
         );
 
     let changed = false;
@@ -792,6 +806,7 @@ async function adoptDescendantIncidents(
         );
 
         emitMonitoringEvent(
+            strayIncident.realmId,
             "incident_updated",
             strayIncident
         );
@@ -806,6 +821,7 @@ async function adoptDescendantIncidents(
         await incident.save();
 
         emitMonitoringEvent(
+            incident.realmId,
             "incident_updated",
             incident
         );
@@ -842,6 +858,7 @@ async function detachFromParentIncident(
     if (parentIncident.impactedDevices.length !== before) {
         await parentIncident.save();
         emitMonitoringEvent(
+            parentIncident.realmId,
             "incident_updated",
             parentIncident
         );
@@ -877,7 +894,7 @@ async function createDeviceIncident(
     }
 
     const technician =
-        await getInitialTechnician();
+        await getInitialTechnician(device.realmId);
 
     const technicianData =
         technician
@@ -994,6 +1011,9 @@ async function createDeviceIncident(
         await Incident.create({
             incidentId,
 
+            realmId:
+                device.realmId,
+
             deviceId:
                 device.deviceId,
 
@@ -1001,7 +1021,7 @@ async function createDeviceIncident(
                 device.hostname,
 
             location:
-                device.location,
+                device.location || "Unknown location",
 
             severity,
 
@@ -1045,6 +1065,7 @@ async function createDeviceIncident(
     );
 
     emitMonitoringEvent(
+        incident.realmId,
         "incident_created",
         incident
     );
@@ -1108,6 +1129,7 @@ async function resolveDeviceIncident(
         );
 
         emitMonitoringEvent(
+            incident.realmId,
             "incident_updated",
             incident
         );
@@ -1380,6 +1402,7 @@ export async function pollDevice(
      */
 
     emitMonitoringEvent(
+        device.realmId,
         "device_updated",
         device.toObject()
     );

@@ -4,6 +4,7 @@ import DeviceSystemSample from "../models/DeviceSystemSample.js";
 import { discoverInterfaces, bulkGetInterfaceOperationalTable, getDeviceSystemMetrics } from "./snmpService.js";
 import { evaluateInterfaceHealth, evaluateInterfaceErrorRate, updateFlapWindow, evaluateInterfaceFlap, syncInterfaceIncident, syncInterfaceDegradationIncident, syncInterfaceFlapIncident, FLAP_DEFAULTS } from "./interfaceHealthService.js";
 import { evaluateSystemMetricHealth, syncSystemHealthIncident } from "./systemHealthService.js";
+import { emitToRealm } from "./realtimeService.js";
 
 // Admin status, interface names/descriptions and speed/duplex are
 // config-driven and change rarely, so they're synced on their own slow
@@ -180,7 +181,7 @@ export async function syncDeviceInterfacesAdmin(deviceId) {
   const discovered = await discoverInterfaces(device);
   device.interfaces = upsertDiscoveredInterfaces(device.interfaces, discovered);
   await device.save();
-  if (global.io) global.io.emit("device_updated", device.toObject());
+  if (global.io) emitToRealm(device.realmId, "device_updated", device.toObject());
   console.log(`[INTERFACE ADMIN SYNC] ${device.hostname}: ${discovered.length} interface(s) synced.`);
   return { success: true, skipped: false, device, count: discovered.length };
 }
@@ -191,6 +192,7 @@ async function saveSample(device, iface) {
   const expiresAt = new Date(new Date(sampledAt).getTime() + 7 * 24 * 60 * 60 * 1000);
   await InterfaceSample.create({
     deviceId: device.deviceId,
+    realmId: device.realmId,
     hostname: device.hostname,
     ifIndex: Number(iface.ifIndex),
     interfaceName: iface.name,
@@ -289,7 +291,7 @@ export async function pollDeviceInterfaces(deviceId) {
     }
     device.interfaces = updatedInterfaces;
     await device.save();
-    if (global.io) global.io.emit("device_updated", device.toObject());
+    if (global.io) emitToRealm(device.realmId, "device_updated", device.toObject());
     return { success: true, skipped: false, device, error: error.message };
   }
 
@@ -501,7 +503,7 @@ export async function pollDeviceInterfaces(deviceId) {
 
   device.interfaces = updatedInterfaces;
   await device.save();
-  if (global.io) global.io.emit("device_updated", device.toObject());
+  if (global.io) emitToRealm(device.realmId, "device_updated", device.toObject());
   return { success: true, skipped: false, device };
 }
 
@@ -509,6 +511,7 @@ async function saveSystemSample(device, metric, utilizationPercent, health, samp
   const expiresAt = new Date(sampledAt.getTime() + 7 * 24 * 60 * 60 * 1000);
   await DeviceSystemSample.create({
     deviceId: device.deviceId,
+    realmId: device.realmId,
     hostname: device.hostname,
     metric,
     utilizationPercent,
@@ -573,7 +576,7 @@ export async function pollDeviceSystemHealth(deviceId) {
   }
 
   await device.save();
-  if (global.io) global.io.emit("device_updated", device.toObject());
+  if (global.io) emitToRealm(device.realmId, "device_updated", device.toObject());
   return { success: true, device };
 }
 

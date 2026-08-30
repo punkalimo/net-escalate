@@ -49,13 +49,13 @@ export function matchIntent(question) {
 }
 
 async function loadIncidentContext(incident) {
-  const devices = await Device.find({}).lean();
+  const devices = await Device.find({ realmId: incident.realmId }).lean();
   const deviceById = new Map(devices.map(d => [d.deviceId, d]));
   const device = devices.find(d => incidentDeviceMatches(incident, d)) || null;
 
   let childRefs = [];
   if (incident.correlationRole === "ROOT" && incident.correlationGroupId) {
-    const childDocs = await Incident.find({ correlationGroupId: incident.correlationGroupId, correlationRole: "CHILD" }).select("device interfaceName createdAt").lean();
+    const childDocs = await Incident.find({ realmId: incident.realmId, correlationGroupId: incident.correlationGroupId, correlationRole: "CHILD" }).select("device interfaceName createdAt").lean();
     childRefs = childDocs.map(child => {
       const childDevice = devices.find(d => incidentDeviceMatches(child, d)) || null;
       return { deviceId: childDevice?.deviceId || null, hostname: childDevice?.hostname || child.device, interfaceName: child.interfaceName, createdAt: child.createdAt };
@@ -106,8 +106,8 @@ export function answerForIntent(intentKey, incident, context) {
   }
 }
 
-export async function answerIncidentQuestion(question, incidentId) {
-  const incident = await Incident.findOne({ incidentId }).lean();
+export async function answerIncidentQuestion(question, incidentId, realmId) {
+  const incident = await Incident.findOne({ incidentId, realmId }).lean();
   if (!incident) return { success: false, message: `Incident ${incidentId} not found.` };
 
   const intentKey = matchIntent(question) || "summarize";

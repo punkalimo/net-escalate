@@ -85,12 +85,17 @@ const systemMetricSchema = new mongoose.Schema(
 const deviceSchema = new mongoose.Schema(
   {
     deviceId: { type: String, unique: true, required: true, trim: true }, parentDeviceId: { type: String, default: null, index: true },
+    // Every device belongs to exactly one Realm. ipAddress is deliberately
+    // NOT globally unique here - two tenants very commonly monitor the same
+    // private-range IP (e.g. both have a 10.0.0.1 core router). See the
+    // realmId+ipAddress compound unique index below instead.
+    realmId: { type: mongoose.Schema.Types.ObjectId, ref: "Realm", required: true, index: true },
     // Topology tier, used to weight incident severity (a core-device fault
     // outranks the same fault on an access switch or host) - set explicitly
     // per device rather than inferred from parentDeviceId depth, since a
     // shallow tree doesn't always mean "important."
     role: { type: String, enum: ["core", "edge", "access", "host"], default: "access" },
-    hostname: { type: String, required: true, trim: true }, ipAddress: { type: String, unique: true, required: true, trim: true }, deviceType: { type: String, enum: ["router", "switch", "firewall", "server", "access-point", "printer", "other"], default: "other" }, vendor: { type: String, default: "" }, model: { type: String, default: "" }, location: { type: String, default: "" }, description: { type: String, default: "" }, interfaces: { type: [interfaceSchema], default: [] }, monitoringEnabled: { type: Boolean, default: true }, pollingInterval: { type: Number, default: 30, min: 5 }, monitoringMethods: { type: [{ type: String, enum: ["icmp", "snmp", "http", "https"] }], default: ["icmp"] }, snmp: { type: snmpSchema, default: () => ({}) }, http: { enabled: { type: Boolean, default: false }, protocol: { type: String, enum: ["http", "https"], default: "http" }, port: { type: Number, default: 80, min: 1, max: 65535 }, path: { type: String, default: "/" } },
+    hostname: { type: String, required: true, trim: true }, ipAddress: { type: String, required: true, trim: true }, deviceType: { type: String, enum: ["router", "switch", "firewall", "server", "access-point", "printer", "other"], default: "other" }, vendor: { type: String, default: "" }, model: { type: String, default: "" }, location: { type: String, default: "" }, description: { type: String, default: "" }, interfaces: { type: [interfaceSchema], default: [] }, monitoringEnabled: { type: Boolean, default: true }, pollingInterval: { type: Number, default: 30, min: 5 }, monitoringMethods: { type: [{ type: String, enum: ["icmp", "snmp", "http", "https"] }], default: ["icmp"] }, snmp: { type: snmpSchema, default: () => ({}) }, http: { enabled: { type: Boolean, default: false }, protocol: { type: String, enum: ["http", "https"], default: "http" }, port: { type: Number, default: 80, min: 1, max: 65535 }, path: { type: String, default: "/" } },
     alertThresholds: {
       utilizationWarning: { type: Number, default: 70, min: 1, max: 100 }, utilizationDegraded: { type: Number, default: 85, min: 1, max: 100 }, utilizationCritical: { type: Number, default: 95, min: 1, max: 100 },
       // Combined in+out errors/discards per minute (a rate, not a lifetime
@@ -111,6 +116,10 @@ const deviceSchema = new mongoose.Schema(
     systemHealth: { cpu: { type: systemMetricSchema, default: () => ({}) }, memory: { type: systemMetricSchema, default: () => ({}) } }
   }, { timestamps: true }
 );
+
+deviceSchema.index({ realmId: 1, ipAddress: 1 }, { unique: true });
+deviceSchema.index({ realmId: 1, status: 1 });
+deviceSchema.index({ realmId: 1, monitoringEnabled: 1 });
 
 // Normalize legacy records as soon as a device is saved. Runtime SNMP sessions also trim credentials, so existing records remain usable.
 deviceSchema.pre("save", function normalizeSnmpCredentials(next) {

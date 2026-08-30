@@ -60,7 +60,7 @@ export async function findSimilarIncidents(incident, { limit = 3, minScore = 40,
   else if (incident.device) orConditions.push({ device: incident.device });
   if (incident.location) orConditions.push({ location: incident.location });
 
-  const candidates = await Incident.find({ status: "RESOLVED", incidentId: { $ne: incident.incidentId }, $or: orConditions })
+  const candidates = await Incident.find({ realmId: incident.realmId, status: "RESOLVED", incidentId: { $ne: incident.incidentId }, $or: orConditions })
     .sort({ resolvedAt: -1 })
     .limit(candidateWindow)
     .lean();

@@ -13,16 +13,22 @@
 // the query entirely, which is the cancellation.
 
 import Incident from "../models/Incident.js";
+import Realm from "../models/Realm.js";
 import { computeSlaStatus } from "./escalationPolicyService.js";
 import { pushTimelineEvent } from "./timelineService.js";
 import { processIncident, MAX_LEVEL } from "./incidentService.js";
+import { emitToRealm } from "./realtimeService.js";
 
 const TRACKED_STATUSES = ["OPEN", "CALLING", "ESCALATING", "ACKNOWLEDGED", "FAILED"];
 
+// Tracks by incidentId only (globally unique regardless of realm), so -
+// unlike incidentCorrelationService.js's in-flight guard - this doesn't need
+// to be keyed per-realm to stay tenant-safe; it just stops the same
+// incident being processed twice concurrently.
 const inFlight = new Set();
 
-export async function sweepEscalationTimeouts() {
-  const incidents = await Incident.find({ status: { $in: TRACKED_STATUSES } }).exec();
+export async function sweepEscalationTimeouts(realmId) {
+  const incidents = await Incident.find({ realmId, status: { $in: TRACKED_STATUSES } }).exec();
   let escalated = 0;
 
   for (const incident of incidents) {
@@ -41,7 +47,7 @@ export async function sweepEscalationTimeouts() {
       incident.escalationLevel = nextLevel;
       incident.status = "ESCALATING";
       await incident.save();
-      if (global.io) global.io.emit("incident_updated", incident);
+      if (global.io) emitToRealm(incident.realmId, "incident_updated", incident);
 
       await processIncident(incident, global.io);
       escalated += 1;
@@ -53,6 +59,20 @@ export async function sweepEscalationTimeouts() {
   }
 
   return { checked: incidents.length, escalated };
+}
+
+async function sweepAllRealms() {
+  const realms = await Realm.find({ status: "active" }).select("_id").lean();
+  let checked = 0, escalated = 0;
+  for (const realm of realms) {
+    try {
+      const result = await sweepEscalationTimeouts(realm._id);
+      checked += result.checked; escalated += result.escalated;
+    } catch (error) {
+      console.error(`[ESCALATION SWEEP] Failed for realm ${realm._id}: ${error.message}`);
+    }
+  }
+  return { checked, escalated };
 }
 
 let sweepTimer = null;
@@ -73,7 +93,7 @@ export function startEscalationTimeoutSweep(intervalSeconds = 60) {
   sweepTimer = setInterval(() => {
     if (sweepRunning) return;
     sweepRunning = true;
-    sweepEscalationTimeouts()
+    sweepAllRealms()
       .catch(error => console.error(`[ESCALATION SWEEP] Failed: ${error.message}`))
       .finally(() => { sweepRunning = false; });
   }, intervalSeconds * 1000);

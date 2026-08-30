@@ -1,5 +1,6 @@
 import Incident from "../models/Incident.js";
 import { syncFaultIncident } from "./faultIncidentService.js";
+import { emitToRealm } from "./realtimeService.js";
 
 export const HEALTH_THRESHOLDS = {
   utilizationWarning: 70,
@@ -247,7 +248,7 @@ export async function syncInterfaceFlapIncident({ device, iface, flapResult, sta
       { status: "RESOLVED", resolvedAt: new Date(), $set: { description: `Superseded by flap incident ${result.incidentId}: this interface is flapping rather than experiencing a single sustained outage.` } },
       { new: true }
     );
-    if (folded && global.io) global.io.emit("incident_updated", folded);
+    if (folded && global.io) emitToRealm(device.realmId, "incident_updated", folded);
   }
 
   return result;

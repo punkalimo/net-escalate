@@ -63,8 +63,8 @@ function findDeviceByNeighbor(devices, neighbor) {
   return devices.find(d => [d.hostname, d.deviceId, d.ipAddress].map(normalizeName).filter(Boolean).some(candidate => candidate === target || candidate.includes(target) || target.includes(candidate))) || null;
 }
 
-export async function discoverTopology() {
-  const devices = await Device.find({}).lean().exec();
+export async function discoverTopology(realmId) {
+  const devices = await Device.find({ realmId }).lean().exec();
   const nodes = devices.map(device => ({ id: device.deviceId, label: device.hostname, hostname: device.hostname, ipAddress: device.ipAddress, deviceType: device.deviceType, vendor: device.vendor, model: device.model, location: device.location, status: device.status, monitoringEnabled: device.monitoringEnabled }));
   const nodeIds = new Set(nodes.map(n => n.id)); const edges = []; const seen = new Set(); const diagnostics = [];
   for (const device of devices) {

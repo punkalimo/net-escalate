@@ -8,7 +8,7 @@ const router = express.Router();
 
 router.get("/", async (req, res) => {
   try {
-    const technicians = await Technician.find().sort({ level: 1, name: 1 });
+    const technicians = await Technician.find({ realmId: req.realmId }).sort({ level: 1, name: 1 });
     res.json({ success: true, technicians });
   } catch (error) {
     console.error("Get technicians error:", error);
@@ -22,7 +22,7 @@ router.post("/", requireLevel(3), async (req, res) => {
   try {
     const { technicianId, name, phone, level, role, active = true } = req.body;
     if (!technicianId || !name || !phone || !level) return res.status(400).json({ success: false, message: "Technician ID, name, phone and level are required." });
-    const technician = await Technician.create({ technicianId, name, phone, level: Number(level), role, active });
+    const technician = await Technician.create({ technicianId, realmId: req.realmId, name, phone, level: Number(level), role, active });
     res.status(201).json({ success: true, technician });
   } catch (error) {
     console.error("Create technician error:", error);
@@ -41,7 +41,7 @@ router.post("/:technicianId/credentials", requireLevel(3), async (req, res) => {
     const password = String(req.body?.password || "");
     if (!username || password.length < 8) return res.status(400).json({ success: false, message: "Username and an at-least-8-character password are required." });
 
-    const technician = await Technician.findOne({ technicianId: req.params.technicianId });
+    const technician = await Technician.findOne({ technicianId: req.params.technicianId, realmId: req.realmId });
     if (!technician) return res.status(404).json({ success: false, message: "Technician not found." });
 
     technician.username = username;
@@ -55,9 +55,22 @@ router.post("/:technicianId/credentials", requireLevel(3), async (req, res) => {
   }
 });
 
+// Explicit whitelist, not a raw ...req.body spread: Technician now also
+// carries realmId/realmRole/platformRole/username/passwordHash, and a naive
+// spread would let a request body silently reassign its own realm, grant
+// itself a platform role, or overwrite the password hash directly. Only
+// these contact/escalation fields are updatable through this route -
+// realmRole changes and credentials go through their own dedicated,
+// level-gated paths.
+const PATCHABLE_FIELDS = ["name", "phone", "level", "role", "active"];
+
 router.patch("/:technicianId", async (req, res) => {
   try {
-    const technician = await Technician.findOneAndUpdate({ technicianId: req.params.technicianId }, { $set: { ...req.body, level: req.body.level != null ? Number(req.body.level) : undefined } }, { new: true, runValidators: true });
+    const updates = {};
+    for (const field of PATCHABLE_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(req.body, field)) updates[field] = field === "level" ? Number(req.body.level) : req.body[field];
+    }
+    const technician = await Technician.findOneAndUpdate({ technicianId: req.params.technicianId, realmId: req.realmId }, { $set: updates }, { new: true, runValidators: true });
     if (!technician) return res.status(404).json({ success: false, message: "Technician not found." });
     res.json({ success: true, technician });
   } catch (error) {
@@ -68,7 +81,7 @@ router.patch("/:technicianId", async (req, res) => {
 
 router.delete("/:technicianId", async (req, res) => {
   try {
-    const technician = await Technician.findOneAndDelete({ technicianId: req.params.technicianId });
+    const technician = await Technician.findOneAndDelete({ technicianId: req.params.technicianId, realmId: req.realmId });
     if (!technician) return res.status(404).json({ success: false, message: "Technician not found." });
     res.json({ success: true, technicianId: req.params.technicianId });
   } catch (error) {
@@ -79,7 +92,7 @@ router.delete("/:technicianId", async (req, res) => {
 
 router.get("/:technicianId/capability", async (req, res) => {
   try {
-    const technician = await Technician.findOne({ technicianId: req.params.technicianId });
+    const technician = await Technician.findOne({ technicianId: req.params.technicianId, realmId: req.realmId });
     if (!technician) return res.status(404).json({ success: false, message: "Technician not found." });
     res.json({ success: true, capability: getCallCapability(technician.phone) });
   } catch (error) {
@@ -89,7 +102,7 @@ router.get("/:technicianId/capability", async (req, res) => {
 
 router.post("/:technicianId/test-call", async (req, res) => {
   try {
-    const technician = await Technician.findOne({ technicianId: req.params.technicianId, active: true });
+    const technician = await Technician.findOne({ technicianId: req.params.technicianId, realmId: req.realmId, active: true });
     if (!technician) return res.status(404).json({ success: false, message: "Active technician not found." });
     const capability = getCallCapability(technician.phone);
     if (capability.state === "UNSUPPORTED") return res.status(422).json({ success: false, provider: "calle", code: capability.code, capability, message: capability.message });
@@ -113,7 +126,7 @@ router.post("/:technicianId/test-call", async (req, res) => {
 router.get("/level/:level", async (req, res) => {
   try {
     const level = Number(req.params.level);
-    const technicians = await Technician.find({ level, active: true });
+    const technicians = await Technician.find({ realmId: req.realmId, level, active: true });
     res.json({ success: true, technicians });
   } catch (error) {
     console.error("Get technicians by level error:", error);

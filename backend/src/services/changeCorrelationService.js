@@ -28,10 +28,10 @@ export async function findPossibleChangeCause(incident, { windowMinutes = DEFAUL
   const incidentAt = new Date(incident.createdAt);
   const windowStart = new Date(incidentAt.getTime() - windowMinutes * 60000);
 
-  const change = await ConfigSnapshot.findOne({ deviceId: incident.deviceId, changed: true, capturedAt: { $gte: windowStart, $lte: incidentAt } }).sort({ capturedAt: -1 }).lean();
+  const change = await ConfigSnapshot.findOne({ realmId: incident.realmId, deviceId: incident.deviceId, changed: true, capturedAt: { $gte: windowStart, $lte: incidentAt } }).sort({ capturedAt: -1 }).lean();
   if (!change) return null;
 
-  const priorForInterval = await ConfigSnapshot.findOne({ deviceId: incident.deviceId, capturedAt: { $lt: change.capturedAt } }).sort({ capturedAt: -1 }).lean();
+  const priorForInterval = await ConfigSnapshot.findOne({ realmId: incident.realmId, deviceId: incident.deviceId, capturedAt: { $lt: change.capturedAt } }).sort({ capturedAt: -1 }).lean();
   const snapshotIntervalMinutes = priorForInterval ? Math.round((new Date(change.capturedAt).getTime() - new Date(priorForInterval.capturedAt).getTime()) / 60000) : null;
 
   const deltaSeconds = Math.round((incidentAt.getTime() - new Date(change.capturedAt).getTime()) / 1000);
