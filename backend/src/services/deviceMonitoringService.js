@@ -12,6 +12,7 @@ import { processIncident } from "./incidentService.js";
 import { computeSeverityWithReasons } from "./severityService.js";
 import { buildTimelineEvent } from "./timelineService.js";
 import { emitToRealm } from "./realtimeService.js";
+import { postSystemMessage } from "./chatService.js";
 
 const execAsync = promisify(exec);
 
@@ -1069,6 +1070,14 @@ async function createDeviceIncident(
         "incident_created",
         incident
     );
+
+    if (incident.severity === "critical") {
+        postSystemMessage(
+            incident.realmId,
+            `🔴 Critical incident ${incident.incidentId} created: ${incident.device} - ${incident.description}`,
+            { linkedIncidentId: incident.incidentId }
+        ).catch(() => {});
+    }
 
     if (technician) {
         processIncident(

@@ -10,6 +10,7 @@
     "create-admin": "node scripts/create-admin.mjs",
     "create-platform-admin": "node scripts/create-platform-admin.mjs",
     "migrate-to-realms": "node scripts/migrate-to-realms.mjs",
+    "backfill-realm-roles": "node scripts/backfill-realm-roles.mjs",
     "test": "node --test"
   },
   "dependencies": {
@@ -23,6 +24,7 @@
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.18.0",
+    "multer": "^2.3.0",
     "net-snmp": "^3.26.3",
     "socket.io": "^4.8.1"
   },

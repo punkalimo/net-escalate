@@ -9,4 +9,14 @@ export function emitToRealm(realmId, event, payload) {
   global.io.to(String(realmId)).emit(event, payload);
 }
 
-export default { emitToRealm };
+// A technician's own private room (joined at connect time in server.js,
+// alongside their realm room) - the only sanctioned path for anything that
+// must reach ONE person rather than everyone in a realm, e.g. a DM. Never
+// use emitToRealm for that: it would hand the private payload to every
+// socket in the realm room even if the UI chooses not to render it there.
+export function emitToTechnician(technicianId, event, payload) {
+  if (!global.io || !technicianId) return;
+  global.io.to(`tech:${technicianId}`).emit(event, payload);
+}
+
+export default { emitToRealm, emitToTechnician };

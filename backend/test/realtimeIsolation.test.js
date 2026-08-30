@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { io as ioClient } from "socket.io-client";
 import { startTestSocketServer, stopTestSocketServer } from "../test-support/testSocketServer.mjs";
 import { signAuthToken, AUTH_COOKIE_NAME } from "../src/services/authService.js";
-import { emitToRealm } from "../src/services/realtimeService.js";
+import { emitToRealm, emitToTechnician } from "../src/services/realtimeService.js";
 
 // No database needed here - only JWT cookies and the socket.io wiring
 // itself are under test (does a client join the right realm room, does
@@ -14,8 +14,8 @@ const REALM_B = "bbbbbbbbbbbbbbbbbbbbbbbb";
 
 let server;
 
-function connectAs(realmId, port) {
-  const token = signAuthToken({ technicianId: `TECH-${realmId}`, username: `user-${realmId}`, name: "Test User", role: "Technician", level: 1, realmId, realmRole: "technician" });
+function connectAs(realmId, port, technicianId = `TECH-${realmId}`) {
+  const token = signAuthToken({ technicianId, username: `user-${technicianId}`, name: "Test User", role: "Technician", level: 1, realmId, realmRole: "technician" });
   return ioClient(`http://localhost:${port}`, {
     transports: ["websocket"],
     extraHeaders: { Cookie: `${AUTH_COOKIE_NAME}=${token}` }
@@ -65,4 +65,28 @@ test("a socket with no realmId (platform admin, no entered realm) receives no re
 
   assert.equal(received.length, 0);
   client.close();
+});
+
+test("emitToTechnician (a DM) only reaches that technician's own socket, not their whole realm room", async () => {
+  const clientAlice = connectAs(REALM_A, server.port, "TECH-ALICE");
+  const clientBob = connectAs(REALM_A, server.port, "TECH-BOB");
+
+  await Promise.all([
+    new Promise(resolve => clientAlice.on("connect", resolve)),
+    new Promise(resolve => clientBob.on("connect", resolve))
+  ]);
+
+  const receivedByAlice = [];
+  const receivedByBob = [];
+  clientAlice.on("chat_message", payload => receivedByAlice.push(payload));
+  clientBob.on("chat_message", payload => receivedByBob.push(payload));
+
+  emitToTechnician("TECH-BOB", "chat_message", { text: "private to Bob" });
+  await new Promise(resolve => setTimeout(resolve, 200));
+
+  assert.equal(receivedByBob.length, 1, "Bob's own socket should receive the DM");
+  assert.equal(receivedByAlice.length, 0, "Alice must NOT receive Bob's DM even though they share a realm room");
+
+  clientAlice.close();
+  clientBob.close();
 });

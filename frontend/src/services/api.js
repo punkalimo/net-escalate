@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+export const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 // withCredentials so the httpOnly session cookie set by /auth/login is sent
 // on every request - see backend/src/server.js's CORS config, which must
 // use an explicit origin (not "*") for this to work.
@@ -19,6 +19,8 @@ api.interceptors.response.use(response => response, error => {
 export async function login(username, password) { return (await api.post("/auth/login", { username, password })).data; }
 export async function logout() { return (await api.post("/auth/logout")).data; }
 export async function getMe() { return (await api.get("/auth/me")).data; }
+export async function updateMyProfile(updates) { return (await api.patch("/auth/me", updates)).data; }
+export async function updateMyCredentials(payload) { return (await api.post("/auth/me/credentials", payload)).data; }
 
 export async function getIncidents() { return (await api.get("/incidents")).data; }
 export async function getIncidentOverview() { return (await api.get("/incidents/overview")).data; }
@@ -51,6 +53,8 @@ export async function updateTechnician(technicianId, technician) { return (await
 export async function deleteTechnician(technicianId) { return (await api.delete(`/technicians/${technicianId}`)).data; }
 export async function getTechnicianCapability(technicianId) { return (await api.get(`/technicians/${technicianId}/capability`)).data; }
 export async function setTechnicianCredentials(technicianId, username, password) { return (await api.post(`/technicians/${technicianId}/credentials`, { username, password })).data; }
+export async function updateTechnicianRole(technicianId, realmRole) { return (await api.patch(`/technicians/${technicianId}/role`, { realmRole })).data; }
+export async function getTechnicianPerformance() { return (await api.get("/technicians/performance")).data; }
 export async function testTechnicianCall(technicianId, payload = {}) { return (await api.post(`/technicians/${technicianId}/test-call`, payload)).data; }
 export async function getSites() { return (await api.get("/sites")).data; }
 export async function getSite(siteId) { return (await api.get(`/sites/${siteId}`)).data; }
@@ -71,6 +75,16 @@ export async function getDeviceInterfaces(deviceId) { return (await api.get(`/in
 export async function getInterfaceHistory(deviceId, ifIndex, hours = 24) { const params = { hours }; if (ifIndex != null) params.ifIndex = ifIndex; return (await api.get(`/interfaces/${deviceId}/history`, { params })).data; }
 export async function setInterfaceMonitored(deviceId, ifIndex, monitored) { return (await api.patch(`/interfaces/${deviceId}/${ifIndex}/monitored`, { monitored })).data; }
 export async function getSystemHealthHistory(deviceId, metric, hours = 24) { const params = { hours }; if (metric) params.metric = metric; return (await api.get(`/devices/${deviceId}/system-health/history`, { params })).data; }
+export async function getTeamMessages(before) { return (await api.get("/messages/team", { params: before ? { before } : {} })).data; }
+// Content-Type explicitly unset so the browser fills in the multipart
+// boundary itself - the shared `api` instance's default JSON content-type
+// header would otherwise override it and break multer's parsing server-side.
+export async function postTeamMessage({ text, attachment }) { const form = new FormData(); form.append("text", text || ""); if (attachment) form.append("attachment", attachment); return (await api.post("/messages/team", form, { headers: { "Content-Type": undefined } })).data; }
+export async function getConversations() { return (await api.get("/messages/conversations")).data; }
+export async function getDmMessages(technicianId, before) { return (await api.get(`/messages/dm/${technicianId}`, { params: before ? { before } : {} })).data; }
+export async function postDmMessage(technicianId, { text, attachment }) { const form = new FormData(); form.append("text", text || ""); if (attachment) form.append("attachment", attachment); return (await api.post(`/messages/dm/${technicianId}`, form, { headers: { "Content-Type": undefined } })).data; }
+export function attachmentUrl(messageId) { return `${API_URL}/api/messages/attachments/${messageId}`; }
+
 export async function getTopology() { return (await api.get("/topology")).data; }
 export async function discoverTopology() { return (await api.post("/topology/discover")).data; }
 export async function getDevicePath(deviceId) { return (await api.get(`/topology/devices/${deviceId}/path`)).data; }

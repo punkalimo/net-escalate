@@ -42,6 +42,34 @@ export default function PlatformAnalytics() {
           <div className="mt-4 space-y-2 text-xs">{data.escalationsByRealm.length ? data.escalationsByRealm.map(row => <div key={row.realmId} className="flex items-center justify-between border-b border-slate-800/60 pb-2 last:border-0"><span className="text-slate-400">{row.realmName}</span><span className="text-slate-300">{row.triggered} triggered · {row.resolved} resolved · {row.failed} failed</span></div>) : <p className="text-slate-600">No escalation activity in this window.</p>}</div>
         </div>
       </section>
+
+      <section className="overflow-hidden rounded-2xl border border-slate-800/80 bg-slate-900/60">
+        <div className="border-b border-slate-800/80 bg-slate-950/50 px-5 py-3"><h3 className="text-sm font-semibold text-white">Site performance - last {data.windowDays} days</h3></div>
+        <div className="grid grid-cols-1 gap-3 border-b border-slate-800/80 bg-slate-950/30 px-5 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-600 md:grid-cols-[1.2fr_1fr_90px_90px_90px_90px]"><span>Site</span><span>Realm</span><span>Devices</span><span>Down</span><span>Incidents</span><span>Escalated</span></div>
+        {data.sites.length ? data.sites.map(s => <div key={s.siteId} className="grid items-center gap-3 border-b border-slate-800/70 px-5 py-3 text-sm last:border-0 md:grid-cols-[1.2fr_1fr_90px_90px_90px_90px]">
+          <span className="truncate font-medium text-white">{s.name}</span>
+          <span className="truncate text-slate-400">{s.realmName}</span>
+          <span className="text-slate-300">{s.deviceCount}</span>
+          <span className={s.devicesDown ? "text-red-400" : "text-slate-300"}>{s.devicesDown}</span>
+          <span className="text-slate-300">{s.incidents}</span>
+          <span className={s.escalated ? "text-amber-400" : "text-slate-300"}>{s.escalated}</span>
+        </div>) : <div className="p-8 text-center text-sm text-slate-600">No sites configured yet.</div>}
+      </section>
+
+      <section className="overflow-hidden rounded-2xl border border-slate-800/80 bg-slate-900/60">
+        <div className="border-b border-slate-800/80 bg-slate-950/50 px-5 py-3"><h3 className="text-sm font-semibold text-white">Technician performance - all time</h3></div>
+        <div className="grid grid-cols-1 gap-3 border-b border-slate-800/80 bg-slate-950/30 px-5 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-600 md:grid-cols-[1.1fr_1fr_1fr_80px_80px_90px_90px_100px]"><span>Technician</span><span>Realm</span><span>Role</span><span>Active</span><span>Resolved</span><span>Ack rate</span><span>Mean TTA</span><span>Escalated away</span></div>
+        {data.technicians.length ? data.technicians.map(t => <div key={t.technicianId} className="grid items-center gap-3 border-b border-slate-800/70 px-5 py-3 text-sm last:border-0 md:grid-cols-[1.1fr_1fr_1fr_80px_80px_90px_90px_100px]">
+          <span className="truncate font-medium text-white">{t.name}</span>
+          <span className="truncate text-slate-400">{t.realmName}</span>
+          <span className="truncate text-slate-400">{(t.realmRole || "technician").replaceAll("_", " ")}</span>
+          <span className={t.activeIncidents ? "text-amber-400" : "text-slate-300"}>{t.activeIncidents}</span>
+          <span className="text-slate-300">{t.resolvedIncidents}</span>
+          <span className="text-slate-300">{t.acknowledgeRate != null ? `${t.acknowledgeRate}%` : "—"}</span>
+          <span className="text-slate-300">{t.meanTimeToAcknowledgeMinutes != null ? `${t.meanTimeToAcknowledgeMinutes}m` : "—"}</span>
+          <span className={t.escalatedAway ? "text-red-400" : "text-slate-300"}>{t.escalatedAway}</span>
+        </div>) : <div className="p-8 text-center text-sm text-slate-600">No technicians found.</div>}
+      </section>
     </div> : null}
   </div>;
 }

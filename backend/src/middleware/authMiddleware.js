@@ -52,6 +52,21 @@ export function requirePlatform(req, res, next) {
   return next();
 }
 
+// Gates account-management actions (edit/deactivate/delete a technician,
+// reset their credentials, change their realmRole, view team performance) on
+// realmRole - a distinct authority axis from `level` (which is escalation-
+// tier routing, not permission). A platform admin bypasses this the same way
+// they bypass requireLevel. realm_owner/realm_admin/noc_manager and
+// senior_engineer are all treated as realm managers; plain technician/viewer
+// accounts are not.
+const REALM_MANAGER_ROLES = new Set(["realm_owner", "realm_admin", "noc_manager", "senior_engineer"]);
+export function requireRealmManager(req, res, next) {
+  if (!req.user) return res.status(401).json({ success: false, message: "Authentication required." });
+  if (req.user.platformRole) return next();
+  if (REALM_MANAGER_ROLES.has(req.user.realmRole)) return next();
+  return res.status(403).json({ success: false, message: "This action requires a realm admin, NOC manager, or senior engineer role." });
+}
+
 // Computes req.realmId (and, for a platform admin, req.realmContext) for
 // every tenant-scoped route to filter its queries by. This is the ONLY
 // place realm scope is derived from the request - route handlers must use
@@ -91,4 +106,4 @@ export function attachRealmScope(req, res, next) {
   return next();
 }
 
-export default { requireAuth, requireLevel, requirePlatform, attachRealmScope };
+export default { requireAuth, requireLevel, requirePlatform, requireRealmManager, attachRealmScope };

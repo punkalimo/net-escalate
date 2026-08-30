@@ -13,6 +13,7 @@ import incidentRoutes from "../src/routes/incidentRoutes.js";
 import technicianRoutes from "../src/routes/technicianRoutes.js";
 import deviceRoutes from "../src/routes/deviceRoutes.js";
 import siteRoutes from "../src/routes/siteRoutes.js";
+import messageRoutes from "../src/routes/messageRoutes.js";
 import platformRoutes from "../src/routes/platformRoutes.js";
 import { requireAuth, requirePlatform, attachRealmScope } from "../src/middleware/authMiddleware.js";
 
@@ -29,5 +30,6 @@ export function buildTestApp() {
   app.use("/api/technicians", technicianRoutes);
   app.use("/api/devices", deviceRoutes);
   app.use("/api/sites", siteRoutes);
+  app.use("/api/messages", messageRoutes);
   return app;
 }

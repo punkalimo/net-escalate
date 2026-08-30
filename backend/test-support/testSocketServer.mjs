@@ -17,6 +17,7 @@ export function startTestSocketServer() {
       const cookies = parseCookie(socket.handshake.headers.cookie || "");
       const user = verifyAuthToken(cookies[AUTH_COOKIE_NAME]);
       socket.user = user;
+      socket.technicianId = user.technicianId || null;
       if (user.platformRole) {
         try { socket.realmId = verifyRealmContext(cookies[REALM_CONTEXT_COOKIE_NAME]).realmId; }
         catch { socket.realmId = null; }
@@ -30,6 +31,7 @@ export function startTestSocketServer() {
   });
   io.on("connection", socket => {
     if (socket.realmId) socket.join(String(socket.realmId));
+    if (socket.technicianId) socket.join(`tech:${socket.technicianId}`);
   });
 
   return new Promise(resolve => {

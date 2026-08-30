@@ -3,6 +3,7 @@ import Technician from "../models/Technician.js";
 import { computeSeverityWithReasons } from "./severityService.js";
 import { buildTimelineEvent } from "./timelineService.js";
 import { emitToRealm } from "./realtimeService.js";
+import { postSystemMessage } from "./chatService.js";
 
 // Shared incident lifecycle for any monitored fault condition - interface
 // status, interface error-rate degradation, interface flapping, or
@@ -133,6 +134,7 @@ export async function syncFaultIncident({
         });
 
         if (global.io) emitToRealm(device.realmId, "incident_created", incident);
+        if (incident.severity === "critical") postSystemMessage(device.realmId, `🔴 Critical incident ${incident.incidentId} created: ${incident.device} - ${incident.description}`, { linkedIncidentId: incident.incidentId }).catch(() => {});
 
         const { processIncident } = await import("./incidentService.js");
         processIncident(incident, global.io).catch(error => {

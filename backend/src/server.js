@@ -16,6 +16,7 @@ import topologyRoutes from "./routes/topologyRoutes.js";
 import devicePathRoutes from "./routes/devicePathRoutes.js";
 import phase4Routes from "./routes/phase4Routes.js";
 import platformRoutes from "./routes/platformRoutes.js";
+import messageRoutes from "./routes/messageRoutes.js";
 import { requireAuth, requirePlatform, attachRealmScope } from "./middleware/authMiddleware.js";
 import { verifyAuthToken, AUTH_COOKIE_NAME, verifyRealmContext, REALM_CONTEXT_COOKIE_NAME } from "./services/authService.js";
 import { startAllDeviceMonitoring, setMonitoringSocket } from "./services/deviceMonitoringService.js";
@@ -56,6 +57,7 @@ app.use("/api/incidents", incidentRoutes(io));
 app.use("/api/technicians", technicianRoutes);
 app.use("/api/devices", deviceRoutes);
 app.use("/api/sites", siteRoutes);
+app.use("/api/messages", messageRoutes);
 app.use("/api/interfaces", interfaceRoutes);
 app.use("/api/topology", topologyRoutes);
 app.use("/api/topology", devicePathRoutes);
@@ -69,6 +71,7 @@ io.use((socket, next) => {
     const cookies = parseCookie(socket.handshake.headers.cookie || "");
     const user = verifyAuthToken(cookies[AUTH_COOKIE_NAME]);
     socket.user = user;
+    socket.technicianId = user.technicianId || null;
     if (user.platformRole) {
       try {
         const context = verifyRealmContext(cookies[REALM_CONTEXT_COOKIE_NAME]);
@@ -91,6 +94,10 @@ io.on("connection", socket => {
   // entered a realm) simply joins nothing and receives no tenant-owned
   // real-time events, matching how their REST requests behave too.
   if (socket.realmId) socket.join(String(socket.realmId));
+  // A technician's own private room - see realtimeService.js's
+  // emitToTechnician, the only sanctioned way to reach one person (a DM)
+  // rather than a whole realm.
+  if (socket.technicianId) socket.join(`tech:${socket.technicianId}`);
   socket.on("disconnect", () => console.log("Dashboard disconnected:", socket.id));
 });
 const PORT = process.env.PORT || 5000;

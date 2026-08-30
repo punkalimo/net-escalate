@@ -4,9 +4,12 @@ import Realm from "../models/Realm.js";
 import Technician from "../models/Technician.js";
 import Device from "../models/Device.js";
 import Incident from "../models/Incident.js";
+import Site from "../models/Site.js";
 import AuditLog from "../models/AuditLog.js";
 import { computeIncidentOverview } from "../services/dashboardService.js";
-import { signRealmContext, REALM_CONTEXT_COOKIE_NAME, REALM_CONTEXT_COOKIE_MAX_AGE_MS } from "../services/authService.js";
+import { computeTechnicianPerformance } from "../services/technicianPerformanceService.js";
+import { computePlatformSitePerformance } from "../services/platformPerformanceService.js";
+import { signRealmContext, hashPassword, REALM_CONTEXT_COOKIE_NAME, REALM_CONTEXT_COOKIE_MAX_AGE_MS } from "../services/authService.js";
 import { logAudit } from "../services/auditLogService.js";
 
 const REALM_CONTEXT_COOKIE_OPTIONS = {
@@ -209,10 +212,72 @@ export default function platformRoutes() {
         Technician.countDocuments(filter)
       ]);
       const names = await realmNameMap(technicians.map(t => t.realmId).filter(Boolean));
-      return res.json({ success: true, technicians: technicians.map(t => ({ ...t, realmName: names.get(String(t.realmId)) || null })), pagination: { total, limit, skip, returned: technicians.length, hasMore: skip + technicians.length < total } });
+      // .lean() returns plain objects, bypassing the schema's toJSON
+      // transform that normally strips passwordHash on every other route in
+      // this app - replicate that transform by hand here so the platform
+      // admin's browser never receives a bcrypt hash over the wire.
+      return res.json({ success: true, technicians: technicians.map(t => { const { passwordHash, ...rest } = t; return { ...rest, hasLogin: !!passwordHash, realmName: names.get(String(t.realmId)) || null }; }), pagination: { total, limit, skip, returned: technicians.length, hasMore: skip + technicians.length < total } });
     } catch (error) {
       console.error("PLATFORM TECHNICIANS ERROR:", error);
       return res.status(500).json({ success: false, message: "Failed to list technicians.", error: error.message });
+    }
+  });
+
+  // Detail/edit/credential-reset for a single technician, reachable
+  // directly - unlike the realm-scoped equivalents in technicianRoutes.js,
+  // these deliberately do NOT filter by realmId (this whole router sits
+  // behind requirePlatform, before attachRealmScope even runs - see
+  // server.js) so a platform admin can act on any realm's technician
+  // without first Entering it. technicianId is globally unique (schema
+  // constraint), so a bare findOne/findOneAndUpdate by it is unambiguous.
+  const PLATFORM_TECHNICIAN_PATCHABLE_FIELDS = ["name", "phone", "role", "active"];
+
+  router.get("/technicians/:id", async (req, res) => {
+    try {
+      const technician = await Technician.findOne({ technicianId: req.params.id });
+      if (!technician) return res.status(404).json({ success: false, message: "Technician not found." });
+      const realm = technician.realmId ? await Realm.findById(technician.realmId).select("name").lean() : null;
+      return res.json({ success: true, technician, realmName: realm?.name || null });
+    } catch (error) {
+      console.error("PLATFORM TECHNICIAN DETAIL ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to retrieve technician.", error: error.message });
+    }
+  });
+
+  router.patch("/technicians/:id", async (req, res) => {
+    try {
+      const updates = {};
+      for (const field of PLATFORM_TECHNICIAN_PATCHABLE_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, field)) updates[field] = req.body[field];
+      }
+      const technician = await Technician.findOneAndUpdate({ technicianId: req.params.id }, { $set: updates }, { new: true, runValidators: true });
+      if (!technician) return res.status(404).json({ success: false, message: "Technician not found." });
+      await logAudit({ actor: req.user, realmId: technician.realmId, targetType: "Technician", targetId: technician.technicianId, action: "PLATFORM_TECHNICIAN_UPDATED", metadata: updates, req });
+      return res.json({ success: true, technician });
+    } catch (error) {
+      console.error("PLATFORM TECHNICIAN UPDATE ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to update technician.", error: error.message });
+    }
+  });
+
+  router.post("/technicians/:id/credentials", async (req, res) => {
+    try {
+      const username = String(req.body?.username || "").trim().toLowerCase();
+      const password = String(req.body?.password || "");
+      if (!username || password.length < 8) return res.status(400).json({ success: false, message: "Username and an at-least-8-character password are required." });
+
+      const technician = await Technician.findOne({ technicianId: req.params.id });
+      if (!technician) return res.status(404).json({ success: false, message: "Technician not found." });
+
+      technician.username = username;
+      technician.passwordHash = await hashPassword(password);
+      await technician.save();
+      await logAudit({ actor: req.user, realmId: technician.realmId, targetType: "Technician", targetId: technician.technicianId, action: "PLATFORM_TECHNICIAN_CREDENTIALS_RESET", req });
+      return res.json({ success: true, technician });
+    } catch (error) {
+      console.error("PLATFORM TECHNICIAN CREDENTIALS ERROR:", error);
+      const duplicate = error?.code === 11000;
+      return res.status(duplicate ? 409 : 500).json({ success: false, message: duplicate ? "That username is already taken." : "Failed to set login credentials." });
     }
   });
 
@@ -233,6 +298,36 @@ export default function platformRoutes() {
     } catch (error) {
       console.error("PLATFORM DEVICES ERROR:", error);
       return res.status(500).json({ success: false, message: "Failed to list devices.", error: error.message });
+    }
+  });
+
+  // Cross-realm site rollup - generalizes siteRoutes.js's GET / (same
+  // per-site device/down/active-incident aggregation, no realmId $match).
+  router.get("/sites", async (req, res) => {
+    try {
+      const filter = {};
+      if (req.query.realmId) filter.realmId = toObjectId(req.query.realmId);
+
+      const sites = await Site.find(filter).sort({ name: 1 }).lean();
+      const [deviceRows, incidentRows] = await Promise.all([
+        Device.aggregate([{ $match: { siteId: { $ne: null } } }, { $group: { _id: "$siteId", count: { $sum: 1 }, down: { $sum: { $cond: [{ $eq: ["$status", "DOWN"] }, 1, 0] } } } }]),
+        Device.aggregate([
+          { $match: { siteId: { $ne: null }, activeIncidentId: { $ne: null } } },
+          { $group: { _id: "$siteId", count: { $sum: 1 } } }
+        ])
+      ]);
+      const deviceCountBySite = new Map(deviceRows.map(row => [String(row._id), row.count]));
+      const downCountBySite = new Map(deviceRows.map(row => [String(row._id), row.down]));
+      const incidentCountBySite = new Map(incidentRows.map(row => [String(row._id), row.count]));
+      const names = await realmNameMap(sites.map(s => s.realmId).filter(Boolean));
+
+      return res.json({
+        success: true,
+        sites: sites.map(site => ({ ...site, realmName: names.get(String(site.realmId)) || null, deviceCount: deviceCountBySite.get(String(site._id)) || 0, devicesDown: downCountBySite.get(String(site._id)) || 0, activeIncidentCount: incidentCountBySite.get(String(site._id)) || 0 }))
+      });
+    } catch (error) {
+      console.error("PLATFORM SITES ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to list sites.", error: error.message });
     }
   });
 
@@ -264,7 +359,7 @@ export default function platformRoutes() {
       const days = Math.min(Math.max(Number.parseInt(req.query.days || "30", 10) || 30, 1), 90);
       const since = new Date(Date.now() - days * 24 * 3600 * 1000);
 
-      const [byRealmIncidents, bySeverity, byRealmEscalations, realms] = await Promise.all([
+      const [byRealmIncidents, bySeverity, byRealmEscalations, realms, sites, technicians] = await Promise.all([
         Incident.aggregate([{ $match: { createdAt: { $gte: since } } }, { $group: { _id: "$realmId", count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
         Incident.aggregate([{ $match: { createdAt: { $gte: since } } }, { $group: { _id: "$severity", count: { $sum: 1 } } }]),
         Incident.aggregate([
@@ -272,7 +367,9 @@ export default function platformRoutes() {
           { $project: { realmId: 1, status: 1, escalationLevel: 1, resolvedAt: 1, createdAt: 1, escalated: { $gt: ["$escalationLevel", 1] } } },
           { $group: { _id: "$realmId", triggered: { $sum: { $cond: ["$escalated", 1, 0] } }, resolved: { $sum: { $cond: [{ $eq: ["$status", "RESOLVED"] }, 1, 0] } }, failed: { $sum: { $cond: [{ $eq: ["$status", "FAILED"] }, 1, 0] } } } }
         ]),
-        Realm.find({}).select("name").lean()
+        Realm.find({}).select("name").lean(),
+        computePlatformSitePerformance({ windowDays: days }),
+        computeTechnicianPerformance({})
       ]);
 
       const nameById = new Map(realms.map(r => [String(r._id), r.name]));
@@ -281,7 +378,9 @@ export default function platformRoutes() {
         windowDays: days,
         incidentsByRealm: byRealmIncidents.map(row => ({ realmId: row._id, realmName: nameById.get(String(row._id)) || "Unknown", count: row.count })),
         severityBreakdown: Object.fromEntries(bySeverity.map(row => [row._id || "unknown", row.count])),
-        escalationsByRealm: byRealmEscalations.map(row => ({ realmId: row._id, realmName: nameById.get(String(row._id)) || "Unknown", triggered: row.triggered, resolved: row.resolved, failed: row.failed }))
+        escalationsByRealm: byRealmEscalations.map(row => ({ realmId: row._id, realmName: nameById.get(String(row._id)) || "Unknown", triggered: row.triggered, resolved: row.resolved, failed: row.failed })),
+        sites,
+        technicians
       });
     } catch (error) {
       console.error("PLATFORM ANALYTICS ERROR:", error);
@@ -296,6 +395,8 @@ export default function platformRoutes() {
       const filter = {};
       if (req.query.realmId) filter.realmId = toObjectId(req.query.realmId);
       if (req.query.action) filter.action = req.query.action;
+      if (req.query.targetId) filter.targetId = req.query.targetId;
+      if (req.query.actorTechnicianId) filter.actorTechnicianId = req.query.actorTechnicianId;
 
       const [entries, total] = await Promise.all([
         AuditLog.find(filter).sort({ at: -1 }).skip(skip).limit(limit).lean(),

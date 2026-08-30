@@ -18,6 +18,7 @@ import { computeSlaStatus } from "./escalationPolicyService.js";
 import { pushTimelineEvent } from "./timelineService.js";
 import { processIncident, MAX_LEVEL } from "./incidentService.js";
 import { emitToRealm } from "./realtimeService.js";
+import { postSystemMessage } from "./chatService.js";
 
 const TRACKED_STATUSES = ["OPEN", "CALLING", "ESCALATING", "ACKNOWLEDGED", "FAILED"];
 
@@ -48,6 +49,7 @@ export async function sweepEscalationTimeouts(realmId) {
       incident.status = "ESCALATING";
       await incident.save();
       if (global.io) emitToRealm(incident.realmId, "incident_updated", incident);
+      postSystemMessage(incident.realmId, `⬆️ Incident ${incident.incidentId} escalated to level ${nextLevel}: ${reason}.`, { linkedIncidentId: incident.incidentId }).catch(() => {});
 
       await processIncident(incident, global.io);
       escalated += 1;

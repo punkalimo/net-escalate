@@ -15,6 +15,7 @@ import { buildTimelineEvent, pushTimelineEvent } from "../services/timelineServi
 import { computeSlaStatus } from "../services/escalationPolicyService.js";
 import { MAX_LEVEL } from "../services/incidentService.js";
 import { computeIncidentOverview } from "../services/dashboardService.js";
+import { postSystemMessage } from "../services/chatService.js";
 
 function generateRemediationActionId() {
   return `REM-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -65,6 +66,7 @@ export default function incidentRoutes(io) {
 
       if (io) emitToRealm(req.realmId, "incident_created", incident);
       processIncident(incident, io).catch(error => console.error("Escalation workflow error:", error));
+      if (incident.severity === "critical") postSystemMessage(req.realmId, `🔴 Critical incident ${incident.incidentId} created: ${incident.device} - ${incident.description}`, { linkedIncidentId: incident.incidentId }).catch(() => {});
 
       return res.status(201).json({ success: true, message: "Incident created and escalation workflow started.", incident });
     } catch (error) {

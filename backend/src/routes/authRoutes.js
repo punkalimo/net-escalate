@@ -1,7 +1,7 @@
 import express from "express";
 import Technician from "../models/Technician.js";
 import Realm from "../models/Realm.js";
-import { verifyPassword, signAuthToken, AUTH_COOKIE_NAME, AUTH_COOKIE_MAX_AGE_MS } from "../services/authService.js";
+import { verifyPassword, hashPassword, signAuthToken, AUTH_COOKIE_NAME, AUTH_COOKIE_MAX_AGE_MS } from "../services/authService.js";
 import { requireAuth, attachRealmScope } from "../middleware/authMiddleware.js";
 import { logAudit } from "../services/auditLogService.js";
 
@@ -15,6 +15,14 @@ const COOKIE_OPTIONS = {
   secure: process.env.NODE_ENV === "production",
   maxAge: AUTH_COOKIE_MAX_AGE_MS
 };
+
+// Shared shape for the "user" object returned to the frontend, used at
+// login and again whenever a self-service update re-issues the cookie -
+// keeping this in one place avoids the three call sites drifting apart.
+async function buildUserPayload(technician) {
+  const realm = technician.realmId ? await Realm.findById(technician.realmId).select("name").lean() : null;
+  return { technicianId: technician.technicianId, username: technician.username, name: technician.name, phone: technician.phone || null, role: technician.role, level: technician.level, realmId: technician.realmId ? String(technician.realmId) : null, realmName: realm?.name || null, realmRole: technician.realmRole || null, platformRole: technician.platformRole || null };
+}
 
 export default function authRoutes() {
   const router = express.Router();
@@ -32,10 +40,9 @@ export default function authRoutes() {
         return res.status(401).json({ success: false, message: "Invalid username or password." });
       }
 
-      const realm = technician.realmId ? await Realm.findById(technician.realmId).select("name").lean() : null;
-      const token = signAuthToken(technician, { realmName: realm?.name || null });
+      const user = await buildUserPayload(technician);
+      const token = signAuthToken(technician, { realmName: user.realmName });
       res.cookie(AUTH_COOKIE_NAME, token, COOKIE_OPTIONS);
-      const user = { technicianId: technician.technicianId, username: technician.username, name: technician.name, role: technician.role, level: technician.level, realmId: technician.realmId ? String(technician.realmId) : null, realmName: realm?.name || null, realmRole: technician.realmRole || null, platformRole: technician.platformRole || null };
       await logAudit({ actor: user, realmId: user.realmId, targetType: "Technician", targetId: technician.technicianId, action: "LOGIN", req });
       return res.json({ success: true, user });
     } catch (error) {
@@ -52,6 +59,68 @@ export default function authRoutes() {
 
   router.get("/me", requireAuth, attachRealmScope, (req, res) => {
     return res.json({ success: true, user: { ...req.user, enteredRealm: req.realmContext || null } });
+  });
+
+  // Self-service bio edit - deliberately gated only by requireAuth (no
+  // realm-manager check): editing your OWN name/phone is scoped entirely by
+  // req.user.technicianId, not by any other technician's id, so there's
+  // nothing to authorize beyond "is this a valid session."
+  router.patch("/me", requireAuth, async (req, res) => {
+    try {
+      const updates = {};
+      for (const field of ["name", "phone"]) {
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, field)) updates[field] = req.body[field];
+      }
+      const technician = await Technician.findOneAndUpdate({ technicianId: req.user.technicianId }, { $set: updates }, { new: true, runValidators: true });
+      if (!technician) return res.status(404).json({ success: false, message: "Account not found." });
+
+      const user = await buildUserPayload(technician);
+      const token = signAuthToken(technician, { realmName: user.realmName });
+      res.cookie(AUTH_COOKIE_NAME, token, COOKIE_OPTIONS);
+      await logAudit({ actor: user, realmId: user.realmId, targetType: "Technician", targetId: technician.technicianId, action: "SELF_PROFILE_UPDATED", metadata: updates, req });
+      return res.json({ success: true, user });
+    } catch (error) {
+      console.error("UPDATE MY PROFILE ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to update your profile." });
+    }
+  });
+
+  // Self-service credential change - requires the CURRENT password (unlike
+  // an admin's POST /technicians/:id/credentials reset), so an unattended,
+  // still-logged-in session can't be used to silently lock out the real
+  // account owner.
+  router.post("/me/credentials", requireAuth, async (req, res) => {
+    try {
+      const currentPassword = String(req.body?.currentPassword || "");
+      const newUsername = req.body?.newUsername != null ? String(req.body.newUsername).trim().toLowerCase() : null;
+      const newPassword = req.body?.newPassword != null ? String(req.body.newPassword) : null;
+
+      const technician = await Technician.findOne({ technicianId: req.user.technicianId });
+      if (!technician) return res.status(404).json({ success: false, message: "Account not found." });
+      // 400, not 401: the session itself is valid (requireAuth already
+      // passed) - a wrong current password is a validation failure, not an
+      // authentication one. Returning 401 here would trip api.js's global
+      // interceptor, which force-logs-out the user on ANY 401 outside
+      // /auth/login, incorrectly ending their still-valid session.
+      if (!await verifyPassword(currentPassword, technician.passwordHash)) return res.status(400).json({ success: false, message: "Current password is incorrect." });
+
+      if (newUsername) technician.username = newUsername;
+      if (newPassword) {
+        if (newPassword.length < 8) return res.status(400).json({ success: false, message: "New password must be at least 8 characters." });
+        technician.passwordHash = await hashPassword(newPassword);
+      }
+      await technician.save();
+
+      const user = await buildUserPayload(technician);
+      const token = signAuthToken(technician, { realmName: user.realmName });
+      res.cookie(AUTH_COOKIE_NAME, token, COOKIE_OPTIONS);
+      await logAudit({ actor: user, realmId: user.realmId, targetType: "Technician", targetId: technician.technicianId, action: "SELF_CREDENTIALS_CHANGED", req });
+      return res.json({ success: true, user });
+    } catch (error) {
+      console.error("UPDATE MY CREDENTIALS ERROR:", error);
+      const duplicate = error?.code === 11000;
+      return res.status(duplicate ? 409 : 500).json({ success: false, message: duplicate ? "That username is already taken." : "Failed to update your credentials." });
+    }
   });
 
   return router;

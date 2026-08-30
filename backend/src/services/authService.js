@@ -29,16 +29,19 @@ export async function verifyPassword(password, passwordHash) {
   return bcrypt.compare(password, passwordHash);
 }
 
-// Payload deliberately excludes phone/passwordHash - only what routes/UI
-// need to identify and authorize the caller. realmId/realmRole are only
-// present for a normal realm technician; platformRole is only present for a
-// platform-level operator (realmId is null for them - see Technician.js).
+// Payload deliberately excludes passwordHash - only what routes/UI need to
+// identify and authorize the caller. phone is included (not a secret, and
+// the "My Profile" self-edit screen needs to show/prefill it) unlike
+// passwordHash. realmId/realmRole are only present for a normal realm
+// technician; platformRole is only present for a platform-level operator
+// (realmId is null for them - see Technician.js).
 export function signAuthToken(technician, { realmName = null } = {}) {
   return jwt.sign(
     {
       technicianId: technician.technicianId,
       username: technician.username,
       name: technician.name,
+      phone: technician.phone || null,
       role: technician.role,
       level: technician.level,
       realmId: technician.realmId ? String(technician.realmId) : null,
