@@ -606,20 +606,40 @@ export async function startInterfaceMonitoring(device) {
     catch (error) { console.error(`[INTERFACE ADMIN SYNC] Initial sync failed for ${device.hostname}: ${error.message}`); }
   }
 
+  // SNMP walks against an unreachable device can legitimately take up to
+  // ~18s each (timeout:5000 x up to 3 retries with backoff:1.2 - see
+  // snmpService.js's createCommonOptions), and a poll cycle can issue
+  // several of those sequentially. That can exceed fastInterval (as low as
+  // 5s), so setInterval alone would stack up overlapping in-flight polls -
+  // each with its own SNMP session/timers/buffers - without bound for any
+  // device that stays down. This flag skips a tick entirely while the
+  // previous one is still running, so at most one poll per device is ever
+  // in flight.
+  let fastCycleRunning = false;
   const fastCycle = async () => {
-    try { await pollDeviceInterfaces(device.deviceId); }
-    catch (error) { console.error(`[INTERFACE MONITOR] Poll failed for ${device.hostname}: ${error.message}`); }
-    try { await pollDeviceSystemHealth(device.deviceId); }
-    catch (error) { console.error(`[SYSTEM HEALTH] Poll failed for ${device.hostname}: ${error.message}`); }
+    if (fastCycleRunning) return;
+    fastCycleRunning = true;
+    try {
+      try { await pollDeviceInterfaces(device.deviceId); }
+      catch (error) { console.error(`[INTERFACE MONITOR] Poll failed for ${device.hostname}: ${error.message}`); }
+      try { await pollDeviceSystemHealth(device.deviceId); }
+      catch (error) { console.error(`[SYSTEM HEALTH] Poll failed for ${device.hostname}: ${error.message}`); }
+    } finally {
+      fastCycleRunning = false;
+    }
   };
 
   await fastCycle();
 
   const fastTimer = setInterval(fastCycle, fastInterval * 1000);
 
+  let slowSyncRunning = false;
   const slowTimer = setInterval(async () => {
+    if (slowSyncRunning) return;
+    slowSyncRunning = true;
     try { await syncDeviceInterfacesAdmin(device.deviceId); }
     catch (error) { console.error(`[INTERFACE ADMIN SYNC] Sync failed for ${device.hostname}: ${error.message}`); }
+    finally { slowSyncRunning = false; }
   }, ADMIN_SYNC_INTERVAL_SECONDS * 1000);
 
   monitoringTimers.set(device.deviceId, { fast: fastTimer, slow: slowTimer });

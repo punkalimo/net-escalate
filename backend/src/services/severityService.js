@@ -133,10 +133,19 @@ export async function sweepActiveIncidentSeverity() {
   return { checked: incidents.length, updated };
 }
 
+// Same overlap guard as escalationSweepService.js: skip a tick entirely if
+// the previous one is still running, rather than letting setInterval stack
+// a new pass on top of it as the active-incident count grows.
+let sweepRunning = false;
+
 export function startSeverityEscalationSweep(intervalSeconds = 60) {
   stopSeverityEscalationSweep();
   sweepTimer = setInterval(() => {
-    sweepActiveIncidentSeverity().catch(error => console.error(`[SEVERITY SWEEP] Failed: ${error.message}`));
+    if (sweepRunning) return;
+    sweepRunning = true;
+    sweepActiveIncidentSeverity()
+      .catch(error => console.error(`[SEVERITY SWEEP] Failed: ${error.message}`))
+      .finally(() => { sweepRunning = false; });
   }, intervalSeconds * 1000);
   console.log(`[SEVERITY SWEEP] Started, every ${intervalSeconds}s`);
 }

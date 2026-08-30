@@ -1453,9 +1453,19 @@ export async function startDeviceMonitoring(
         }
     );
 
+    // Guards against overlapping polls: if a previous tick's ping/SNMP
+    // checks are still in flight when the next interval fires (a device
+    // that stays unreachable can make a single poll take longer than a
+    // short pollingInterval), skip the new tick instead of starting a
+    // second one on top of it. Without this, in-flight polls for a
+    // permanently-down device can stack up without bound.
+    let pollRunning = false;
+
     const timer =
         setInterval(
             async () => {
+                if (pollRunning) return;
+                pollRunning = true;
                 try {
                     await pollDevice(
                         device.deviceId
@@ -1465,6 +1475,8 @@ export async function startDeviceMonitoring(
                         `Monitoring failed for ${device.hostname}:`,
                         error
                     );
+                } finally {
+                    pollRunning = false;
                 }
             },
             interval * 1000

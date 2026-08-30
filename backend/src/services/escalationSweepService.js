@@ -57,10 +57,25 @@ export async function sweepEscalationTimeouts() {
 
 let sweepTimer = null;
 
+// A full pass can take far longer than the sweep interval: it awaits
+// processIncident() (a multi-level technician call chain, several seconds
+// per level) sequentially for every currently-overdue incident. Without
+// this guard, setInterval would start a second full pass on top of a
+// still-running first one every time the interval elapsed, then a third on
+// top of that, and so on - an unbounded pile-up of concurrent passes all
+// re-escalating the same overdue incidents (this is what was actually
+// behind the interval-server memory leak, not a single incident's own
+// timeline growth).
+let sweepRunning = false;
+
 export function startEscalationTimeoutSweep(intervalSeconds = 60) {
   stopEscalationTimeoutSweep();
   sweepTimer = setInterval(() => {
-    sweepEscalationTimeouts().catch(error => console.error(`[ESCALATION SWEEP] Failed: ${error.message}`));
+    if (sweepRunning) return;
+    sweepRunning = true;
+    sweepEscalationTimeouts()
+      .catch(error => console.error(`[ESCALATION SWEEP] Failed: ${error.message}`))
+      .finally(() => { sweepRunning = false; });
   }, intervalSeconds * 1000);
   console.log(`[ESCALATION SWEEP] Started, every ${intervalSeconds}s`);
 }

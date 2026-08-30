@@ -73,10 +73,21 @@ export async function sweepConfigSnapshots() {
 
 let sweepTimer = null;
 
+// Same overlap guard as escalationSweepService.js/severityService.js: each
+// device snapshot is a real SNMP session (captureSnapshot), so a large
+// enough fleet could in principle take longer than the interval to walk -
+// skip a tick rather than starting a second pass on top of a still-running
+// one.
+let sweepRunning = false;
+
 export function startConfigSnapshotSweep(intervalSeconds = 900) {
   stopConfigSnapshotSweep();
   sweepTimer = setInterval(() => {
-    sweepConfigSnapshots().catch(error => console.error(`[CONFIG SNAPSHOT SWEEP] Failed: ${error.message}`));
+    if (sweepRunning) return;
+    sweepRunning = true;
+    sweepConfigSnapshots()
+      .catch(error => console.error(`[CONFIG SNAPSHOT SWEEP] Failed: ${error.message}`))
+      .finally(() => { sweepRunning = false; });
   }, intervalSeconds * 1000);
   console.log(`[CONFIG SNAPSHOT SWEEP] Started, every ${intervalSeconds}s`);
 }
