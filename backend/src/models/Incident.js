@@ -24,7 +24,7 @@ const timelineEventSchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      enum: ["ALERT_RECEIVED", "ALERT_CORRELATED", "INCIDENT_CREATED", "SEVERITY_CHANGED", "ENGINEER_ASSIGNED", "NOTIFICATION_SENT", "INCIDENT_ACKNOWLEDGED", "ENGINEER_COMMENT", "ESCALATION_TRIGGERED", "DEVICE_RECOVERY_DETECTED", "INCIDENT_RESOLVED", "INCIDENT_REOPENED", "INCIDENT_CLOSED", "MERGED", "UNMERGED"],
+      enum: ["ALERT_RECEIVED", "ALERT_CORRELATED", "INCIDENT_CREATED", "SEVERITY_CHANGED", "ENGINEER_ASSIGNED", "NOTIFICATION_SENT", "INCIDENT_ACKNOWLEDGED", "ENGINEER_COMMENT", "ESCALATION_TRIGGERED", "DEVICE_RECOVERY_DETECTED", "INCIDENT_RESOLVED", "INCIDENT_REOPENED", "INCIDENT_CLOSED", "MERGED", "UNMERGED", "REMEDIATION_PROPOSED", "REMEDIATION_APPROVED", "REMEDIATION_REJECTED", "REMEDIATION_STARTED", "REMEDIATION_SUCCEEDED", "REMEDIATION_FAILED"],
       required: true
     },
     message: { type: String, required: true },
@@ -41,6 +41,30 @@ const impactedDeviceSchema = new mongoose.Schema(
     hostname: { type: String, required: true },
     status: { type: String, default: null },
     attachedAt: { type: Date, default: Date.now }
+  },
+  { _id: false }
+);
+
+// A proposed remediation always passes through this exact sequence -
+// PROPOSED -> APPROVED -> RUNNING -> SUCCEEDED/FAILED, or PROPOSED ->
+// REJECTED. Nothing transitions to RUNNING without an explicit approval
+// step first; see remediationService.js for why execution itself is only
+// ever simulated, never a real device command.
+const remediationActionSchema = new mongoose.Schema(
+  {
+    actionId: { type: String, required: true },
+    actionType: { type: String, required: true },
+    label: { type: String, required: true },
+    riskLevel: { type: String, enum: ["low", "medium", "high"], default: "low" },
+    status: { type: String, enum: ["PROPOSED", "APPROVED", "REJECTED", "RUNNING", "SUCCEEDED", "FAILED"], default: "PROPOSED" },
+    proposedBy: { type: String, default: "system" },
+    decidedBy: { type: String, default: null },
+    rejectionReason: { type: String, default: null },
+    result: { type: String, default: null },
+    proposedAt: { type: Date, default: Date.now },
+    decidedAt: { type: Date, default: null },
+    startedAt: { type: Date, default: null },
+    completedAt: { type: Date, default: null }
   },
   { _id: false }
 );
@@ -103,7 +127,8 @@ const incidentSchema = new mongoose.Schema(
     correlationManual: { type: Boolean, default: false },
     escalationHistory: { type: [escalationHistorySchema], default: [] },
     impactedDevices: { type: [impactedDeviceSchema], default: [] },
-    timeline: { type: [timelineEventSchema], default: [] }
+    timeline: { type: [timelineEventSchema], default: [] },
+    remediationActions: { type: [remediationActionSchema], default: [] }
   },
   { timestamps: true }
 );

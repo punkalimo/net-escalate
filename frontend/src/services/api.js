@@ -18,6 +18,11 @@ export async function getIncidentBlastRadius(incidentId) { return (await api.get
 export async function addIncidentComment(incidentId, message, actor) { return (await api.post(`/incidents/${incidentId}/comment`, { message, actor })).data; }
 export async function getIncidentSla(incidentId) { return (await api.get(`/incidents/${incidentId}/sla`)).data; }
 export async function getIncidentRecommendedActions(incidentId) { return (await api.get(`/incidents/${incidentId}/recommended-actions`)).data; }
+export async function getRemediationCatalog(incidentId) { return (await api.get(`/incidents/${incidentId}/remediation-catalog`)).data; }
+export async function proposeRemediation(incidentId, action) { return (await api.post(`/incidents/${incidentId}/remediation`, action)).data; }
+export async function approveRemediation(incidentId, actionId) { return (await api.post(`/incidents/${incidentId}/remediation/${actionId}/approve`)).data; }
+export async function rejectRemediation(incidentId, actionId, reason) { return (await api.post(`/incidents/${incidentId}/remediation/${actionId}/reject`, reason ? { reason } : {})).data; }
+export async function executeRemediation(incidentId, actionId) { return (await api.post(`/incidents/${incidentId}/remediation/${actionId}/execute`)).data; }
 export async function getSimilarIncidents(incidentId) { return (await api.get(`/incidents/${incidentId}/similar-incidents`)).data; }
 export async function getChangeCorrelation(incidentId) { return (await api.get(`/incidents/${incidentId}/change-correlation`)).data; }
 export async function escalateIncident(incidentId) { return (await api.post(`/incidents/${incidentId}/escalate`)).data; }

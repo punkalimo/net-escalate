@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
-import { Activity, AlertTriangle, ArrowUpCircle, Bot, CheckCircle2, Clock3, GitCommit, GitMerge, History, ListChecks, Network, Phone, Radio, RefreshCw, Send, Server, ShieldAlert, Unlink, UserRound, X, Zap } from "lucide-react";
-import { acknowledgeIncident, addIncidentComment, askAssistant, escalateIncident, getChangeCorrelation, getDeviceHistory, getIncident, getIncidentBlastRadius, getIncidentRecommendedActions, getIncidentRootCause, getIncidents, getIncidentSla, getSimilarIncidents, mergeIncident, resolveIncident, unmergeIncident } from "../services/api";
+import { Activity, AlertTriangle, ArrowUpCircle, Bot, CheckCircle2, Clock3, GitCommit, GitMerge, History, ListChecks, Network, PlayCircle, Phone, Radio, RefreshCw, Send, Server, ShieldAlert, Unlink, UserRound, Wrench, X, XCircle, Zap } from "lucide-react";
+import { acknowledgeIncident, addIncidentComment, approveRemediation, askAssistant, escalateIncident, executeRemediation, getChangeCorrelation, getDeviceHistory, getIncident, getIncidentBlastRadius, getIncidentRecommendedActions, getIncidentRootCause, getIncidents, getIncidentSla, getRemediationCatalog, getSimilarIncidents, mergeIncident, proposeRemediation, rejectRemediation, resolveIncident, unmergeIncident } from "../services/api";
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
@@ -164,6 +164,93 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
   };
 
   useEffect(() => { loadRecommendedActions(); }, [incident?.incidentId, incident?.correlationRole, incident?.correlationGroupId, incident?.description]);
+
+  const [remediationCatalog, setRemediationCatalog] = useState(null);
+  const [remediationCatalogLoading, setRemediationCatalogLoading] = useState(true);
+  const [remediationBusyId, setRemediationBusyId] = useState("");
+  const [remediationError, setRemediationError] = useState("");
+
+  const loadRemediationCatalog = async () => {
+    if (!incident?.incidentId) return;
+    setRemediationCatalogLoading(true);
+    try {
+      const result = await getRemediationCatalog(incident.incidentId);
+      if (result.success) setRemediationCatalog(result.remediationCatalog);
+    } catch (e) {
+      // Non-fatal - the rest of the incident page still works without it.
+    } finally {
+      setRemediationCatalogLoading(false);
+    }
+  };
+
+  useEffect(() => { loadRemediationCatalog(); }, [incident?.incidentId, incident?.description]);
+
+  async function proposeAction(action) {
+    if (!incident?.incidentId) return;
+    setRemediationError("");
+    try {
+      const result = await proposeRemediation(incident.incidentId, { actionType: action.actionType, label: action.label, riskLevel: action.riskLevel });
+      if (!result.success) throw new Error(result.message || "Failed to propose remediation.");
+      setIncident(result.incident);
+    } catch (e) {
+      setRemediationError(e.response?.data?.message || e.message || "Unable to propose remediation.");
+    }
+  }
+
+  async function approveAction(actionId) {
+    if (!incident?.incidentId) return;
+    setRemediationBusyId(actionId);
+    setRemediationError("");
+    try {
+      const result = await approveRemediation(incident.incidentId, actionId);
+      if (!result.success) throw new Error(result.message || "Failed to approve remediation.");
+      setIncident(result.incident);
+    } catch (e) {
+      setRemediationError(e.response?.data?.message || e.message || "Unable to approve remediation.");
+    } finally {
+      setRemediationBusyId("");
+    }
+  }
+
+  async function rejectAction(actionId) {
+    if (!incident?.incidentId) return;
+    setRemediationBusyId(actionId);
+    setRemediationError("");
+    try {
+      const result = await rejectRemediation(incident.incidentId, actionId);
+      if (!result.success) throw new Error(result.message || "Failed to reject remediation.");
+      setIncident(result.incident);
+    } catch (e) {
+      setRemediationError(e.response?.data?.message || e.message || "Unable to reject remediation.");
+    } finally {
+      setRemediationBusyId("");
+    }
+  }
+
+  async function runAction(actionId) {
+    if (!incident?.incidentId) return;
+    setRemediationBusyId(actionId);
+    setRemediationError("");
+    try {
+      const result = await executeRemediation(incident.incidentId, actionId);
+      if (!result.success) throw new Error(result.message || "Failed to run remediation.");
+      setIncident(result.incident);
+    } catch (e) {
+      setRemediationError(e.response?.data?.message || e.message || "Unable to run remediation.");
+    } finally {
+      setRemediationBusyId("");
+    }
+  }
+
+  const remediationStatusStyles = {
+    PROPOSED: "border-slate-700 bg-slate-800 text-slate-400",
+    APPROVED: "border-blue-500/30 bg-blue-500/10 text-blue-400",
+    RUNNING: "border-purple-500/30 bg-purple-500/10 text-purple-400",
+    SUCCEEDED: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
+    FAILED: "border-red-500/30 bg-red-500/10 text-red-400",
+    REJECTED: "border-slate-700 bg-slate-800 text-slate-500"
+  };
+  const remediationActions = useMemo(() => [...(incident?.remediationActions || [])].sort((a, b) => new Date(b.proposedAt || 0) - new Date(a.proposedAt || 0)), [incident]);
 
   const [resolutionNotesDraft, setResolutionNotesDraft] = useState("");
   const [similarIncidents, setSimilarIncidents] = useState(null);
@@ -426,6 +513,34 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
                   {recommendedActions.contextNotes?.length > 0 && <div className="mt-2 space-y-1">{recommendedActions.contextNotes.map((note, i) => <p key={i} className="text-xs leading-5 text-amber-300">⚠ {note}</p>)}</div>}
                   <ol className="mt-4 space-y-2">{recommendedActions.actions.map((action, i) => <li key={i} className="flex gap-3 text-sm text-slate-300"><span className="shrink-0 font-mono text-xs text-emerald-500">{i + 1}.</span>{action}</li>)}</ol>
                 </> : <p className="mt-3 text-sm text-slate-500">No recommended actions available yet.</p>}
+              </section>
+
+              <section className="rounded-2xl border border-blue-500/20 bg-blue-500/[0.04] p-5 sm:p-6">
+                <div className="flex items-center gap-2"><Wrench size={18} className="text-blue-400" /><span className="text-xs font-semibold uppercase tracking-[.16em] text-slate-500">Controlled remediation (simulated)</span></div>
+                <p className="mt-1 text-xs text-slate-500">Every action here runs in simulation only, never against a real device. Propose → approve → run - nothing executes without an explicit approval step.</p>
+                {remediationError && <p className="mt-3 text-xs text-red-400">{remediationError}</p>}
+
+                {remediationCatalogLoading && !remediationCatalog ? <p className="mt-3 text-sm text-slate-500">Building remediation options…</p> : remediationCatalog?.actions?.length ? <div className="mt-4 flex flex-wrap gap-2">
+                  {remediationCatalog.actions.map(action => <button key={action.actionType} onClick={() => proposeAction(action)} title={action.description} className="flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:border-blue-500/30 hover:text-blue-300"><Wrench size={12} />{action.label}{action.riskLevel === "high" && <span className="ml-1 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[9px] font-bold text-red-400">HIGH RISK</span>}</button>)}
+                </div> : <p className="mt-3 text-sm text-slate-500">No remediation actions available for this incident's fault type.</p>}
+
+                {remediationActions.length > 0 && <div className="mt-5 space-y-2">
+                  {remediationActions.map(action => <div key={action.actionId} className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2"><span className="text-sm font-medium text-slate-200">{action.label}</span><Pill className={remediationStatusStyles[action.status] || remediationStatusStyles.PROPOSED}>{action.status}</Pill>{action.riskLevel === "high" && <Pill className="border-red-500/30 bg-red-500/10 text-red-400">HIGH RISK</Pill>}</div>
+                      <div className="flex items-center gap-2">
+                        {action.status === "PROPOSED" && <>
+                          <button onClick={() => approveAction(action.actionId)} disabled={remediationBusyId === action.actionId} className="flex items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"><CheckCircle2 size={12} />{remediationBusyId === action.actionId ? "…" : "Approve"}</button>
+                          <button onClick={() => rejectAction(action.actionId)} disabled={remediationBusyId === action.actionId} className="flex items-center gap-1 rounded-lg border border-slate-700 px-2.5 py-1.5 text-[11px] font-semibold text-slate-400 hover:bg-slate-800 disabled:opacity-50"><XCircle size={12} />Reject</button>
+                        </>}
+                        {action.status === "APPROVED" && <button onClick={() => runAction(action.actionId)} disabled={remediationBusyId === action.actionId} className="flex items-center gap-1 rounded-lg border border-blue-500/30 bg-blue-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-blue-300 hover:bg-blue-500/20 disabled:opacity-50"><PlayCircle size={12} />{remediationBusyId === action.actionId ? "…" : "Run (simulated)"}</button>}
+                        {action.status === "RUNNING" && <span className="flex items-center gap-1.5 text-[11px] text-purple-300"><RefreshCw size={12} className="animate-spin" />Simulating…</span>}
+                      </div>
+                    </div>
+                    {action.result && <p className={`mt-2 text-xs leading-5 ${action.status === "FAILED" ? "text-red-400" : "text-slate-400"}`}>{action.result}</p>}
+                    {action.status === "REJECTED" && action.rejectionReason && <p className="mt-2 text-xs leading-5 text-slate-500">Reason: {action.rejectionReason}</p>}
+                  </div>)}
+                </div>}
               </section>
 
               <section className="grid gap-4 md:grid-cols-3">

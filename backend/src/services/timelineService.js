@@ -21,7 +21,13 @@ export const TIMELINE_EVENT_TYPES = [
   "INCIDENT_REOPENED",
   "INCIDENT_CLOSED",
   "MERGED",
-  "UNMERGED"
+  "UNMERGED",
+  "REMEDIATION_PROPOSED",
+  "REMEDIATION_APPROVED",
+  "REMEDIATION_REJECTED",
+  "REMEDIATION_STARTED",
+  "REMEDIATION_SUCCEEDED",
+  "REMEDIATION_FAILED"
 ];
 
 export function buildTimelineEvent(type, message, { actor = "system", metadata = null } = {}) {

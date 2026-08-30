@@ -6,12 +6,17 @@ import { correlateActiveIncidents, incidentDeviceMatches } from "../services/inc
 import { computeRootCause } from "../services/rootCauseService.js";
 import { mergeDownstream, computeBlastRadius } from "../services/blastRadiusService.js";
 import { computeRecommendedActions } from "../services/recommendedActionsService.js";
+import { computeRemediationCatalog, simulateRemediation } from "../services/remediationService.js";
 import { findSimilarIncidents } from "../services/historicalMatchService.js";
 import { findPossibleChangeCause } from "../services/changeCorrelationService.js";
 import { buildTimelineEvent, pushTimelineEvent } from "../services/timelineService.js";
 import { computeSlaStatus } from "../services/escalationPolicyService.js";
 import { MAX_LEVEL } from "../services/incidentService.js";
 import { computeIncidentOverview } from "../services/dashboardService.js";
+
+function generateRemediationActionId() {
+  return `REM-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
 
 async function generateUniqueIncidentId() {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -281,6 +286,118 @@ export default function incidentRoutes(io) {
     } catch (error) {
       console.error("INCIDENT RECOMMENDED ACTIONS ERROR:", error);
       return res.status(500).json({ success: false, message: "Failed to compute recommended actions.", error: error.message });
+    }
+  });
+
+  router.get("/:incidentId/remediation-catalog", async (req, res) => {
+    try {
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId }).lean();
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+
+      const devices = await Device.find({}).lean();
+      const device = devices.find(d => incidentDeviceMatches(incident, d)) || null;
+
+      return res.json({ success: true, remediationCatalog: computeRemediationCatalog(incident, { device }) });
+    } catch (error) {
+      console.error("REMEDIATION CATALOG ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to compute remediation catalog.", error: error.message });
+    }
+  });
+
+  router.post("/:incidentId/remediation", async (req, res) => {
+    try {
+      const actionType = String(req.body?.actionType || "").trim();
+      const label = String(req.body?.label || "").trim();
+      const riskLevel = ["low", "medium", "high"].includes(req.body?.riskLevel) ? req.body.riskLevel : "low";
+      if (!actionType || !label) return res.status(400).json({ success: false, message: "actionType and label are required." });
+
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+      if (incident.status === "RESOLVED") return res.status(409).json({ success: false, message: "Cannot propose remediation on a resolved incident." });
+
+      const action = { actionId: generateRemediationActionId(), actionType, label, riskLevel, status: "PROPOSED", proposedBy: "NOC engineer" };
+      incident.remediationActions.push(action);
+      pushTimelineEvent(incident, "REMEDIATION_PROPOSED", `Proposed remediation: ${label}.`, { actor: "NOC engineer" });
+      await incident.save();
+      if (io) io.emit("incident_updated", incident);
+      return res.status(201).json({ success: true, incident: incident.toObject() });
+    } catch (error) {
+      console.error("PROPOSE REMEDIATION ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to propose remediation.", error: error.message });
+    }
+  });
+
+  router.post("/:incidentId/remediation/:actionId/approve", async (req, res) => {
+    try {
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+      const action = incident.remediationActions.find(a => a.actionId === req.params.actionId);
+      if (!action) return res.status(404).json({ success: false, message: "Remediation action not found." });
+      if (action.status !== "PROPOSED") return res.status(409).json({ success: false, message: `Only a proposed action can be approved (current status: ${action.status}).` });
+
+      action.status = "APPROVED";
+      action.decidedBy = "NOC engineer";
+      action.decidedAt = new Date();
+      pushTimelineEvent(incident, "REMEDIATION_APPROVED", `Approved remediation: ${action.label}.`, { actor: "NOC engineer" });
+      await incident.save();
+      if (io) io.emit("incident_updated", incident);
+      return res.json({ success: true, incident: incident.toObject() });
+    } catch (error) {
+      console.error("APPROVE REMEDIATION ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to approve remediation.", error: error.message });
+    }
+  });
+
+  router.post("/:incidentId/remediation/:actionId/reject", async (req, res) => {
+    try {
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+      const action = incident.remediationActions.find(a => a.actionId === req.params.actionId);
+      if (!action) return res.status(404).json({ success: false, message: "Remediation action not found." });
+      if (action.status !== "PROPOSED") return res.status(409).json({ success: false, message: `Only a proposed action can be rejected (current status: ${action.status}).` });
+
+      const reason = String(req.body?.reason || "").trim();
+      action.status = "REJECTED";
+      action.decidedBy = "NOC engineer";
+      action.decidedAt = new Date();
+      action.rejectionReason = reason || null;
+      pushTimelineEvent(incident, "REMEDIATION_REJECTED", reason ? `Rejected remediation: ${action.label}. Reason: ${reason}` : `Rejected remediation: ${action.label}.`, { actor: "NOC engineer" });
+      await incident.save();
+      if (io) io.emit("incident_updated", incident);
+      return res.json({ success: true, incident: incident.toObject() });
+    } catch (error) {
+      console.error("REJECT REMEDIATION ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to reject remediation.", error: error.message });
+    }
+  });
+
+  router.post("/:incidentId/remediation/:actionId/execute", async (req, res) => {
+    try {
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId });
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+      const action = incident.remediationActions.find(a => a.actionId === req.params.actionId);
+      if (!action) return res.status(404).json({ success: false, message: "Remediation action not found." });
+      if (action.status !== "APPROVED") return res.status(409).json({ success: false, message: `Only an approved action can be executed (current status: ${action.status}).` });
+
+      action.status = "RUNNING";
+      action.startedAt = new Date();
+      pushTimelineEvent(incident, "REMEDIATION_STARTED", `Running remediation (simulated): ${action.label}.`, { actor: "NOC engineer" });
+      await incident.save();
+      if (io) io.emit("incident_updated", incident);
+
+      const { succeeded, message } = await simulateRemediation(action.actionType);
+
+      action.status = succeeded ? "SUCCEEDED" : "FAILED";
+      action.completedAt = new Date();
+      action.result = message;
+      pushTimelineEvent(incident, succeeded ? "REMEDIATION_SUCCEEDED" : "REMEDIATION_FAILED", message, { actor: "system" });
+      await incident.save();
+      if (io) io.emit("incident_updated", incident);
+
+      return res.json({ success: true, incident: incident.toObject() });
+    } catch (error) {
+      console.error("EXECUTE REMEDIATION ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to execute remediation.", error: error.message });
     }
   });
 
