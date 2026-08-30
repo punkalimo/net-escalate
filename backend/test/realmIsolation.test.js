@@ -8,12 +8,16 @@ import Realm from "../src/models/Realm.js";
 import Technician from "../src/models/Technician.js";
 import Device from "../src/models/Device.js";
 import Incident from "../src/models/Incident.js";
+import Site from "../src/models/Site.js";
 import { hashPassword } from "../src/services/authService.js";
+import { stopAllDeviceMonitoring } from "../src/services/deviceMonitoringService.js";
+import { stopAllInterfaceMonitoring } from "../src/services/interfaceMonitoringService.js";
 
 let app;
 let realmA, realmB;
 let deviceA, deviceB;
 let incidentA, incidentB;
+let siteA, siteB;
 let technicianB;
 let agentA;
 
@@ -34,12 +38,22 @@ test.before(async () => {
   incidentA = await Incident.create({ incidentId: "NET-A001", realmId: realmA._id, device: "router-a", deviceId: "DEV-A1", location: "Site A", severity: "high", description: "Realm A incident", technician: { id: "TECH-A1", name: "User A", phone: "+10000000001" } });
   incidentB = await Incident.create({ incidentId: "NET-B001", realmId: realmB._id, device: "router-b", deviceId: "DEV-B1", location: "Site B", severity: "high", description: "Realm B incident", technician: { id: "TECH-B1", name: "User B", phone: "+10000000002" } });
 
+  siteA = await Site.create({ realmId: realmA._id, name: "Lusaka HQ" });
+  siteB = await Site.create({ realmId: realmB._id, name: "Kitwe Branch" });
+
   agentA = request.agent(app);
   const login = await agentA.post("/api/auth/login").send({ username: "usera", password: "TestPass123!" });
   assert.equal(login.status, 200);
 });
 
 test.after(async () => {
+  // A successful device PATCH (see the site-assignment test below) starts
+  // REAL setInterval-based monitoring for that device via deviceRoutes.js's
+  // existing (correct) side effect - those timers otherwise outlive
+  // mongoose.disconnect() and keep the process alive indefinitely, hanging
+  // the whole test run even though every test itself already passed.
+  stopAllDeviceMonitoring();
+  stopAllInterfaceMonitoring();
   await stopInMemoryMongo();
 });
 
@@ -98,4 +112,53 @@ test("Realm A cannot set login credentials on Realm B's technician", async () =>
 test("an unauthenticated request is rejected before any realm scoping runs", async () => {
   const res = await request(app).get("/api/devices");
   assert.equal(res.status, 401);
+});
+
+test("Realm A's site list never includes Realm B's sites", async () => {
+  const res = await agentA.get("/api/sites");
+  assert.equal(res.status, 200);
+  const names = res.body.sites.map(s => s.name);
+  assert.ok(names.includes("Lusaka HQ"));
+  assert.ok(!names.includes("Kitwe Branch"));
+});
+
+test("Realm A cannot GET, PATCH, or DELETE Realm B's site", async () => {
+  const getRes = await agentA.get(`/api/sites/${siteB._id}`);
+  assert.equal(getRes.status, 404);
+
+  const patchRes = await agentA.patch(`/api/sites/${siteB._id}`).send({ name: "hijacked" });
+  assert.equal(patchRes.status, 404);
+  assert.equal((await Site.findById(siteB._id)).name, "Kitwe Branch");
+
+  const deleteRes = await agentA.delete(`/api/sites/${siteB._id}`);
+  assert.equal(deleteRes.status, 404);
+  assert.ok(await Site.findById(siteB._id));
+});
+
+test("Realm A cannot assign its device to Realm B's site (cross-realm siteId injection)", async () => {
+  const res = await agentA.patch(`/api/devices/${deviceA.deviceId}`).send({ siteId: String(siteB._id) });
+  assert.equal(res.status, 400);
+  const stillUnassigned = await Device.findById(deviceA._id);
+  assert.equal(stillUnassigned.siteId, null);
+});
+
+test("Realm A can assign its device to its own site and see it in the site's performance overview", async () => {
+  const assignRes = await agentA.patch(`/api/devices/${deviceA.deviceId}`).send({ siteId: String(siteA._id) });
+  assert.equal(assignRes.status, 200);
+
+  const overviewRes = await agentA.get(`/api/sites/${siteA._id}`);
+  assert.equal(overviewRes.status, 200);
+  assert.equal(overviewRes.body.deviceCount, 1);
+  assert.equal(overviewRes.body.devices[0].deviceId, deviceA.deviceId);
+
+  // The site LIST endpoint's per-site deviceCount comes from Device.aggregate(),
+  // which - unlike find()/countDocuments() - does not auto-cast query values,
+  // so this exercises a distinct code path from computeSiteOverview() above
+  // (a regression once caught deviceCount silently reporting 0 here because
+  // req.realmId, a string off the JWT, was matched against a stored ObjectId).
+  const listRes = await agentA.get("/api/sites");
+  assert.equal(listRes.status, 200);
+  const siteARow = listRes.body.sites.find(s => String(s._id) === String(siteA._id));
+  assert.equal(siteARow.deviceCount, 1);
+  assert.equal(listRes.body.unassignedDeviceCount, 0);
 });

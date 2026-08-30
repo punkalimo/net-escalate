@@ -52,6 +52,11 @@ export async function deleteTechnician(technicianId) { return (await api.delete(
 export async function getTechnicianCapability(technicianId) { return (await api.get(`/technicians/${technicianId}/capability`)).data; }
 export async function setTechnicianCredentials(technicianId, username, password) { return (await api.post(`/technicians/${technicianId}/credentials`, { username, password })).data; }
 export async function testTechnicianCall(technicianId, payload = {}) { return (await api.post(`/technicians/${technicianId}/test-call`, payload)).data; }
+export async function getSites() { return (await api.get("/sites")).data; }
+export async function getSite(siteId) { return (await api.get(`/sites/${siteId}`)).data; }
+export async function createSite(site) { return (await api.post("/sites", site)).data; }
+export async function updateSite(siteId, updates) { return (await api.patch(`/sites/${siteId}`, updates)).data; }
+export async function deleteSite(siteId) { return (await api.delete(`/sites/${siteId}`)).data; }
 export async function getDevices() { return (await api.get("/devices")).data; }
 export async function getDevice(deviceId) { return (await api.get(`/devices/${deviceId}`)).data; }
 export async function createDevice(device) { return (await api.post("/devices", device)).data; }

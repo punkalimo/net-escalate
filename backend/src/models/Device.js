@@ -90,6 +90,11 @@ const deviceSchema = new mongoose.Schema(
     // private-range IP (e.g. both have a 10.0.0.1 core router). See the
     // realmId+ipAddress compound unique index below instead.
     realmId: { type: mongoose.Schema.Types.ObjectId, ref: "Realm", required: true, index: true },
+    // Optional, not required: existing devices predate Sites and stay
+    // "Unassigned" rather than needing a forced backfill. Always the same
+    // Realm as the device itself - enforced at the route layer (deviceRoutes.js),
+    // never trusted from the client alone.
+    siteId: { type: mongoose.Schema.Types.ObjectId, ref: "Site", default: null, index: true },
     // Topology tier, used to weight incident severity (a core-device fault
     // outranks the same fault on an access switch or host) - set explicitly
     // per device rather than inferred from parentDeviceId depth, since a
@@ -120,6 +125,7 @@ const deviceSchema = new mongoose.Schema(
 deviceSchema.index({ realmId: 1, ipAddress: 1 }, { unique: true });
 deviceSchema.index({ realmId: 1, status: 1 });
 deviceSchema.index({ realmId: 1, monitoringEnabled: 1 });
+deviceSchema.index({ realmId: 1, siteId: 1 });
 
 // Normalize legacy records as soon as a device is saved. Runtime SNMP sessions also trim credentials, so existing records remain usable.
 deviceSchema.pre("save", function normalizeSnmpCredentials(next) {

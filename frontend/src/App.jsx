@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, BrainCircuit, LayoutDashboard, LogOut, Network, RefreshCw, Server, Signal, Sparkles, UserRound } from "lucide-react";
+import { AlertTriangle, BrainCircuit, LayoutDashboard, LogOut, MapPin, Network, RefreshCw, Server, Signal, Sparkles, UserRound } from "lucide-react";
 import NocDashboard from "./NocDashboard";
 import TopologyView from "./components/TopologyView";
 import TopologyErrorBoundary from "./components/TopologyErrorBoundary";
@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   ["incidents", "Incidents", AlertTriangle],
   ["interfaces", "Interface Health", Signal],
   ["devices", "Devices", Server],
+  ["sites", "Sites", MapPin],
   ["technicians", "Escalation Team", UserRound],
   ["rca", "RCA", BrainCircuit],
   ["phase4", "Phase 4 Operations", Sparkles],
@@ -28,7 +29,7 @@ function clickExisting(label) {
 }
 
 function openDestination(id) {
-  if (["overview", "incidents", "interfaces", "devices", "technicians"].includes(id)) {
+  if (["overview", "incidents", "interfaces", "devices", "sites", "technicians"].includes(id)) {
     clickExisting(NAV_ITEMS.find(([key]) => key === id)?.[1]);
     return;
   }
@@ -148,7 +149,7 @@ function NavigationBridge() {
 
   return <>
     <IncidentSearchPolish />
-    <nav aria-label="Primary navigation" className="fixed left-0 top-16 z-[45] hidden h-[calc(100vh-16rem)] w-64 border-r border-slate-800/80 bg-[#080d16] px-3 py-3 shadow-xl shadow-black/20 lg:block">
+    <nav aria-label="Primary navigation" className="fixed left-0 top-16 z-[45] hidden h-[calc(100vh-16rem)] w-64 overflow-y-auto border-r border-slate-800/80 bg-[#080d16] px-3 py-3 shadow-xl shadow-black/20 lg:block">
       <p className="px-3 py-3 text-[10px] font-semibold uppercase tracking-[.2em] text-slate-600">Navigation</p>
       {NAV_ITEMS.map(([id, label, Icon]) => <button key={id} type="button" onClick={() => navigate(id)} className={`group relative mb-1 flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 focus-visible:ring-offset-1 focus-visible:ring-offset-[#080d16] ${active === id ? "bg-blue-500/10 text-blue-400" : "text-slate-500 hover:bg-slate-800/50 hover:text-slate-200"}`}>
         {active === id && <span aria-hidden="true" className="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,.55)]" />}

@@ -3,6 +3,7 @@ import net from "net";
 
 import Device from "../models/Device.js";
 import DeviceSystemSample from "../models/DeviceSystemSample.js";
+import Site from "../models/Site.js";
 
 import {
     startDeviceMonitoring,
@@ -269,7 +270,8 @@ router.post(
                 http,
                 alertThresholds,
                 parentDeviceId,
-                monitoredPorts
+                monitoredPorts,
+                siteId
             } = req.body;
 
             if (
@@ -313,6 +315,25 @@ router.post(
                 });
             }
 
+            // A siteId must belong to the SAME realm as the device - never
+            // trust it as a bare id, or a request could attach a device to
+            // another realm's site (a cross-tenant reference injection).
+            if (siteId) {
+                const site =
+                    await Site.findOne({
+                        _id: siteId,
+                        realmId: req.realmId
+                    });
+
+                if (!site) {
+                    return res.status(400).json({
+                        success: false,
+                        message:
+                            "Site not found in this realm."
+                    });
+                }
+            }
+
             let finalDeviceId =
                 deviceId &&
                 String(
@@ -348,6 +369,9 @@ router.post(
 
                 realmId:
                     req.realmId,
+
+                siteId:
+                    siteId || null,
 
                 hostname:
                     String(
@@ -782,6 +806,27 @@ router.patch(
                 });
             }
 
+            // Same cross-realm check as the create route above - a siteId
+            // must belong to this device's own realm.
+            if (
+                Object.prototype.hasOwnProperty.call(req.body, "siteId") &&
+                req.body.siteId
+            ) {
+                const site =
+                    await Site.findOne({
+                        _id: req.body.siteId,
+                        realmId: req.realmId
+                    });
+
+                if (!site) {
+                    return res.status(400).json({
+                        success: false,
+                        message:
+                            "Site not found in this realm."
+                    });
+                }
+            }
+
             const allowedFields = [
                 "hostname",
                 "ipAddress",
@@ -797,7 +842,8 @@ router.patch(
                 "http",
                 "alertThresholds",
                 "monitoredPorts",
-                "parentDeviceId"
+                "parentDeviceId",
+                "siteId"
             ];
 
             for (

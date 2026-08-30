@@ -29,13 +29,18 @@ export function average(values) {
   return values.length ? Math.round(values.reduce((total, value) => total + value, 0) / values.length) : null;
 }
 
-export async function computeIncidentOverview({ realmId, mttrWindowDays = DEFAULT_MTTR_WINDOW_DAYS, sampleLimit = SAMPLE_LIMIT } = {}) {
+// deviceIds: optional - narrows every query to a specific set of devices
+// (e.g. "every device at this Site"), reused as-is by siteService.js's
+// per-site performance rollup rather than duplicating this whole
+// aggregation a second time.
+export async function computeIncidentOverview({ realmId, deviceIds = null, mttrWindowDays = DEFAULT_MTTR_WINDOW_DAYS, sampleLimit = SAMPLE_LIMIT } = {}) {
   const since = new Date(Date.now() - mttrWindowDays * 24 * 3600 * 1000);
+  const deviceFilter = deviceIds ? { deviceId: { $in: deviceIds } } : {};
 
   const [activeCount, active, recentResolved] = await Promise.all([
-    Incident.countDocuments({ realmId, status: { $in: ACTIVE_STATUSES } }),
-    Incident.find({ realmId, status: { $in: ACTIVE_STATUSES } }).sort({ createdAt: -1 }).limit(sampleLimit).lean(),
-    Incident.find({ realmId, status: "RESOLVED", resolvedAt: { $gte: since } }).sort({ resolvedAt: -1 }).limit(sampleLimit).lean()
+    Incident.countDocuments({ realmId, ...deviceFilter, status: { $in: ACTIVE_STATUSES } }),
+    Incident.find({ realmId, ...deviceFilter, status: { $in: ACTIVE_STATUSES } }).sort({ createdAt: -1 }).limit(sampleLimit).lean(),
+    Incident.find({ realmId, ...deviceFilter, status: "RESOLVED", resolvedAt: { $gte: since } }).sort({ resolvedAt: -1 }).limit(sampleLimit).lean()
   ]);
   const sampled = activeCount > active.length;
 
