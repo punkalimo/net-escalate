@@ -1,8 +1,24 @@
 import axios from "axios";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
-const api = axios.create({ baseURL: `${API_URL}/api`, headers: { "Content-Type": "application/json" } });
-api.interceptors.response.use(response => response, error => { console.error("API Error:", error.response?.data || error.message); return Promise.reject(error); });
+// withCredentials so the httpOnly session cookie set by /auth/login is sent
+// on every request - see backend/src/server.js's CORS config, which must
+// use an explicit origin (not "*") for this to work.
+const api = axios.create({ baseURL: `${API_URL}/api`, headers: { "Content-Type": "application/json" }, withCredentials: true });
+api.interceptors.response.use(response => response, error => {
+  console.error("API Error:", error.response?.data || error.message);
+  // A 401 on anything other than the login call itself means the session
+  // expired or was revoked mid-session - tell App.jsx to drop back to the
+  // login screen instead of leaving every open component silently failing.
+  if (error.response?.status === 401 && !error.config?.url?.endsWith("/auth/login")) {
+    window.dispatchEvent(new CustomEvent("netescalate:unauthenticated"));
+  }
+  return Promise.reject(error);
+});
+
+export async function login(username, password) { return (await api.post("/auth/login", { username, password })).data; }
+export async function logout() { return (await api.post("/auth/logout")).data; }
+export async function getMe() { return (await api.get("/auth/me")).data; }
 
 export async function getIncidents() { return (await api.get("/incidents")).data; }
 export async function getIncidentOverview() { return (await api.get("/incidents/overview")).data; }
@@ -34,6 +50,7 @@ export async function createTechnician(technician) { return (await api.post("/te
 export async function updateTechnician(technicianId, technician) { return (await api.patch(`/technicians/${technicianId}`, technician)).data; }
 export async function deleteTechnician(technicianId) { return (await api.delete(`/technicians/${technicianId}`)).data; }
 export async function getTechnicianCapability(technicianId) { return (await api.get(`/technicians/${technicianId}/capability`)).data; }
+export async function setTechnicianCredentials(technicianId, username, password) { return (await api.post(`/technicians/${technicianId}/credentials`, { username, password })).data; }
 export async function testTechnicianCall(technicianId, payload = {}) { return (await api.post(`/technicians/${technicianId}/test-call`, payload)).data; }
 export async function getDevices() { return (await api.get("/devices")).data; }
 export async function getDevice(deviceId) { return (await api.get(`/devices/${deviceId}`)).data; }

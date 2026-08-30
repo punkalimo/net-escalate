@@ -69,7 +69,7 @@ export default function RootCauseCenter() {
   useEffect(() => {
     const openHandler = () => setOpen(true);
     window.addEventListener("netescalate:open-rca", openHandler);
-    const socket = io(SOCKET_URL, { transports: ["websocket", "polling"] });
+    const socket = io(SOCKET_URL, { transports: ["websocket", "polling"], withCredentials: true });
     const update = result => { if (result?.success) { setData(result); setIncidents(result.incidents || []); } };
     socket.on("incident_correlation_updated", update);
     socket.on("incident_created", () => { if (open) load(); });

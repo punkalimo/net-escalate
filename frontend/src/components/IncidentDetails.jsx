@@ -67,7 +67,7 @@ export default function IncidentDetails({ incident: initialIncident, onClose, on
 
   useEffect(() => {
     load();
-    const socket = io(SOCKET_URL, { transports: ["websocket", "polling"] });
+    const socket = io(SOCKET_URL, { transports: ["websocket", "polling"], withCredentials: true });
     const handleUpdate = update => {
       if (update?.incidentId === initialIncident?.incidentId) {
         setIncident(update);

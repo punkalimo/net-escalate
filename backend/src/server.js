@@ -1,9 +1,12 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
+import { parseCookie } from "cookie";
 import mongoose from "mongoose";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import authRoutes from "./routes/authRoutes.js";
 import incidentRoutes from "./routes/incidentRoutes.js";
 import technicianRoutes from "./routes/technicianRoutes.js";
 import deviceRoutes from "./routes/deviceRoutes.js";
@@ -11,6 +14,8 @@ import interfaceRoutes from "./routes/interfaceRoutes.js";
 import topologyRoutes from "./routes/topologyRoutes.js";
 import devicePathRoutes from "./routes/devicePathRoutes.js";
 import phase4Routes from "./routes/phase4Routes.js";
+import { requireAuth } from "./middleware/authMiddleware.js";
+import { verifyAuthToken, AUTH_COOKIE_NAME } from "./services/authService.js";
 import { startAllDeviceMonitoring, setMonitoringSocket } from "./services/deviceMonitoringService.js";
 import { startAllInterfaceMonitoring } from "./services/interfaceMonitoringService.js";
 import { startSeverityEscalationSweep, stopSeverityEscalationSweep } from "./services/severityService.js";
@@ -20,13 +25,22 @@ import { startConfigSnapshotSweep, stopConfigSnapshotSweep } from "./services/co
 const app = express();
 const httpServer = createServer(app);
 const startedAt = Date.now();
-const io = new Server(httpServer, { cors: { origin: process.env.FRONTEND_URL || "*", methods: ["GET", "POST", "PATCH", "DELETE"] } });
+// credentials:true requires an explicit origin, not "*" - the auth cookie
+// depends on this (see authRoutes.js).
+const FRONTEND_ORIGIN = process.env.FRONTEND_URL || "http://localhost:5173";
+const io = new Server(httpServer, { cors: { origin: FRONTEND_ORIGIN, methods: ["GET", "POST", "PATCH", "DELETE"], credentials: true } });
 setMonitoringSocket(io);
 global.io = io;
-app.use(cors({ origin: process.env.FRONTEND_URL || "*" }));
+app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }));
+app.use(cookieParser());
 app.use(express.json({ limit: "1mb" }));
 app.get("/", (req, res) => res.json({ name: "NetEscalate AI", status: "online", uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000) }));
 app.get("/api/health", async (req, res) => { const mongoReady = mongoose.connection.readyState === 1; return res.status(mongoReady ? 200 : 503).json({ status: mongoReady ? "healthy" : "degraded", service: "NetEscalate API", database: mongoReady ? "connected" : "disconnected", uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), timestamp: new Date().toISOString() }); });
+app.use("/api/auth", authRoutes());
+// Everything else under /api requires a valid session - registered after
+// /api/health and /api/auth above, so those stay public (Express matches
+// middleware in registration order).
+app.use("/api", requireAuth);
 app.use("/api/incidents", incidentRoutes(io));
 app.use("/api/technicians", technicianRoutes);
 app.use("/api/devices", deviceRoutes);
@@ -34,7 +48,16 @@ app.use("/api/interfaces", interfaceRoutes);
 app.use("/api/topology", topologyRoutes);
 app.use("/api/topology", devicePathRoutes);
 app.use("/api/phase4", phase4Routes(io));
-io.on("connection", socket => { console.log("Dashboard connected:", socket.id); socket.on("disconnect", () => console.log("Dashboard disconnected:", socket.id)); });
+io.use((socket, next) => {
+  try {
+    const cookies = parseCookie(socket.handshake.headers.cookie || "");
+    socket.user = verifyAuthToken(cookies[AUTH_COOKIE_NAME]);
+    return next();
+  } catch (error) {
+    return next(new Error("unauthorized"));
+  }
+});
+io.on("connection", socket => { console.log("Dashboard connected:", socket.id, `(${socket.user?.username})`); socket.on("disconnect", () => console.log("Dashboard disconnected:", socket.id)); });
 const PORT = process.env.PORT || 5000;
 let monitoringStarted = false;
 function startBackgroundMonitoring() { if (monitoringStarted) return; monitoringStarted = true; Promise.allSettled([startAllDeviceMonitoring(), startAllInterfaceMonitoring()]).then(results => results.forEach((result, index) => { const name = index === 0 ? "device monitoring" : "interface monitoring"; if (result.status === "fulfilled") console.log(`[STARTUP] ${name} initialized.`); else console.error(`[STARTUP] ${name} failed:`, result.reason); })); startSeverityEscalationSweep(); startIncidentCorrelationSweep(); startEscalationTimeoutSweep(); startConfigSnapshotSweep(); }

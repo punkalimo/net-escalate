@@ -1,6 +1,8 @@
 import express from "express";
 import Technician from "../models/Technician.js";
 import { callTechnician, getCallCapability } from "../services/calleService.js";
+import { hashPassword } from "../services/authService.js";
+import { requireLevel } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
@@ -14,7 +16,9 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.post("/", async (req, res) => {
+// Only a Level 3 (senior/on-call) technician can add new escalation
+// contacts - see the "Add technician" gating in the Escalation Team panel.
+router.post("/", requireLevel(3), async (req, res) => {
   try {
     const { technicianId, name, phone, level, role, active = true } = req.body;
     if (!technicianId || !name || !phone || !level) return res.status(400).json({ success: false, message: "Technician ID, name, phone and level are required." });
@@ -24,6 +28,30 @@ router.post("/", async (req, res) => {
     console.error("Create technician error:", error);
     const duplicate = error?.code === 11000;
     res.status(duplicate ? 409 : 500).json({ success: false, message: duplicate ? "Technician ID already exists." : "Failed to create technician." });
+  }
+});
+
+// Grants or resets a technician's dashboard login. Level 3 only, same as
+// creating a technician - this is the in-app replacement for the
+// create-admin.mjs bootstrap script for day-to-day use (new hire, or
+// someone forgot their password).
+router.post("/:technicianId/credentials", requireLevel(3), async (req, res) => {
+  try {
+    const username = String(req.body?.username || "").trim().toLowerCase();
+    const password = String(req.body?.password || "");
+    if (!username || password.length < 8) return res.status(400).json({ success: false, message: "Username and an at-least-8-character password are required." });
+
+    const technician = await Technician.findOne({ technicianId: req.params.technicianId });
+    if (!technician) return res.status(404).json({ success: false, message: "Technician not found." });
+
+    technician.username = username;
+    technician.passwordHash = await hashPassword(password);
+    await technician.save();
+    res.json({ success: true, technician });
+  } catch (error) {
+    console.error("Set technician credentials error:", error);
+    const duplicate = error?.code === 11000;
+    res.status(duplicate ? 409 : 500).json({ success: false, message: duplicate ? "That username is already taken." : "Failed to set login credentials." });
   }
 });
 

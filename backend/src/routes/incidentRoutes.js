@@ -7,6 +7,7 @@ import { computeRootCause } from "../services/rootCauseService.js";
 import { mergeDownstream, computeBlastRadius } from "../services/blastRadiusService.js";
 import { computeRecommendedActions } from "../services/recommendedActionsService.js";
 import { computeRemediationCatalog, simulateRemediation } from "../services/remediationService.js";
+import { requireLevel } from "../middleware/authMiddleware.js";
 import { findSimilarIncidents } from "../services/historicalMatchService.js";
 import { findPossibleChangeCause } from "../services/changeCorrelationService.js";
 import { buildTimelineEvent, pushTimelineEvent } from "../services/timelineService.js";
@@ -327,7 +328,7 @@ export default function incidentRoutes(io) {
     }
   });
 
-  router.post("/:incidentId/remediation/:actionId/approve", async (req, res) => {
+  router.post("/:incidentId/remediation/:actionId/approve", requireLevel(2), async (req, res) => {
     try {
       const incident = await Incident.findOne({ incidentId: req.params.incidentId });
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
@@ -371,7 +372,7 @@ export default function incidentRoutes(io) {
     }
   });
 
-  router.post("/:incidentId/remediation/:actionId/execute", async (req, res) => {
+  router.post("/:incidentId/remediation/:actionId/execute", requireLevel(2), async (req, res) => {
     try {
       const incident = await Incident.findOne({ incidentId: req.params.incidentId });
       if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });

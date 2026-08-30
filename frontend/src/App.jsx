@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, BrainCircuit, LayoutDashboard, Network, Server, Signal, Sparkles, UserRound } from "lucide-react";
+import { AlertTriangle, BrainCircuit, LayoutDashboard, LogOut, Network, RefreshCw, Server, Signal, Sparkles, UserRound } from "lucide-react";
 import NocDashboard from "./NocDashboard";
 import TopologyView from "./components/TopologyView";
 import TopologyErrorBoundary from "./components/TopologyErrorBoundary";
 import RootCauseCenter from "./components/RootCauseCenter";
 import Phase4CommandCenter from "./components/Phase4CommandCenter";
+import Login from "./components/Login";
+import { getMe, logout } from "./services/api";
 
 const NAV_ITEMS = [
   ["overview", "Operations", LayoutDashboard],
@@ -164,9 +166,43 @@ function NavigationBridge() {
   </>;
 }
 
+function UserBadge({ user, onLoggedOut }) {
+  const [busy, setBusy] = useState(false);
+  async function doLogout() {
+    setBusy(true);
+    try { await logout(); } finally { onLoggedOut(); }
+  }
+  return <div className="fixed right-3 top-3 z-[80] flex items-center gap-2 rounded-full border border-slate-800 bg-[#080d16]/95 py-1.5 pl-3 pr-1.5 text-xs text-slate-300 shadow-xl backdrop-blur-xl">
+    <UserRound size={13} className="text-slate-500" />
+    <span className="font-medium">{user.name}</span>
+    <span className="text-slate-600">·</span>
+    <span className="text-slate-500">{user.role}</span>
+    <button onClick={doLogout} disabled={busy} title="Sign out" className="ml-1 flex items-center gap-1 rounded-full border border-slate-700 px-2 py-1 text-[11px] text-slate-400 hover:bg-slate-800 hover:text-white disabled:opacity-50"><LogOut size={12} />{busy ? "…" : "Sign out"}</button>
+  </div>;
+}
+
 export default function App() {
+  const [user, setUser] = useState(null);
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    getMe().then(result => { if (result.success) setUser(result.user); }).catch(() => {}).finally(() => setChecking(false));
+    const onUnauthenticated = () => setUser(null);
+    window.addEventListener("netescalate:unauthenticated", onUnauthenticated);
+    return () => window.removeEventListener("netescalate:unauthenticated", onUnauthenticated);
+  }, []);
+
+  if (checking) {
+    return <div className="flex min-h-screen items-center justify-center bg-[#050810] text-sm text-slate-500"><RefreshCw size={16} className="mr-2 animate-spin" /> Loading…</div>;
+  }
+
+  if (!user) {
+    return <Login onLogin={setUser} />;
+  }
+
   return <>
-    <NocDashboard />
+    <UserBadge user={user} onLoggedOut={() => setUser(null)} />
+    <NocDashboard user={user} />
     <NavigationBridge />
     <RootCauseCenter />
     <TopologyErrorBoundary><TopologyView /></TopologyErrorBoundary>

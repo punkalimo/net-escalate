@@ -238,7 +238,7 @@ export default function InterfaceHealthCenter() {
   useEffect(() => { loadHistory(); }, [deviceId, ifIndex, hours]);
   useEffect(() => { loadSystemHistory(); }, [deviceId, hours]);
   useEffect(() => {
-    const socket = io(SOCKET_URL, { transports: ["websocket", "polling"] });
+    const socket = io(SOCKET_URL, { transports: ["websocket", "polling"], withCredentials: true });
     socket.on("device_updated", device => {
       setDevices(current => current.some(d => d.deviceId === device.deviceId) ? current.map(d => d.deviceId === device.deviceId ? device : d) : current);
     });

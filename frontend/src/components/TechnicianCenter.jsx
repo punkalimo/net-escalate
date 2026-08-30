@@ -1,12 +1,19 @@
 import { useEffect, useState } from "react";
-import { Edit3, Phone, Plus, RefreshCw, Save, Trash2, UserRound, X, ShieldCheck, ShieldAlert, Zap } from "lucide-react";
-import { createTechnician, deleteTechnician, getTechnicians, getTechnicianCapability, testTechnicianCall, updateTechnician } from "../services/api";
+import { Edit3, KeyRound, Phone, Plus, RefreshCw, Save, Trash2, UserRound, X, ShieldCheck, ShieldAlert, Zap } from "lucide-react";
+import { createTechnician, deleteTechnician, getTechnicians, getTechnicianCapability, setTechnicianCredentials, testTechnicianCall, updateTechnician } from "../services/api";
 
 const empty = { technicianId: "", name: "", phone: "", level: 1, role: "Network Technician", active: true };
 
-function TechnicianModal({ technician, onClose, onSaved }) {
+// Only a Level 3 (senior/on-call) technician can add technicians or
+// grant/reset dashboard login access - mirrors the requireLevel(3) gate on
+// POST /technicians and /technicians/:id/credentials in the backend.
+function isAdmin(user) { return Number(user?.level) >= 3; }
+
+function TechnicianModal({ technician, admin, onClose, onSaved }) {
   const [form, setForm] = useState(technician || empty);
   const [busy, setBusy] = useState(false);
+  const [credUsername, setCredUsername] = useState(technician?.username || "");
+  const [credPassword, setCredPassword] = useState("");
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   async function submit(e) {
     e.preventDefault(); setBusy(true);
@@ -14,6 +21,11 @@ function TechnicianModal({ technician, onClose, onSaved }) {
       const payload = { ...form, technicianId: form.technicianId.trim(), name: form.name.trim(), phone: form.phone.trim(), level: Number(form.level) };
       const r = technician ? await updateTechnician(technician.technicianId, payload) : await createTechnician(payload);
       if (!r.success) throw new Error(r.message || "Failed to save technician.");
+
+      if (admin && credPassword.trim()) {
+        const cr = await setTechnicianCredentials(r.technician.technicianId, credUsername.trim(), credPassword);
+        if (!cr.success) throw new Error(cr.message || "Technician saved, but login credentials could not be set.");
+      }
       onSaved(r.technician); onClose();
     } catch (e) { alert(e.response?.data?.message || e.message); } finally { setBusy(false); }
   }
@@ -28,6 +40,16 @@ function TechnicianModal({ technician, onClose, onSaved }) {
         <input placeholder="Role" value={form.role} onChange={e=>set("role",e.target.value)} className="form-input sm:col-span-2"/>
       </div>
       <label className="mt-4 flex items-center gap-2 text-sm text-slate-400"><input type="checkbox" checked={form.active !== false} onChange={e=>set("active",e.target.checked)}/> Active for escalation</label>
+
+      {admin && <div className="mt-5 rounded-xl border border-slate-800 bg-slate-950/40 p-4">
+        <div className="flex items-center gap-2 text-slate-300"><KeyRound size={14} className="text-blue-400"/><span className="text-xs font-semibold uppercase tracking-wider">Dashboard login</span>{technician?.hasLogin && <span className="rounded-full border border-emerald-500/20 bg-emerald-500/5 px-2 py-0.5 text-[10px] font-bold text-emerald-400">Enabled</span>}</div>
+        <p className="mt-1.5 text-[11px] leading-4 text-slate-600">{technician?.hasLogin ? "Leave password blank to keep the current one. Setting a new password resets it immediately." : "Optional - grant this technician access to sign in to the dashboard."}</p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <input placeholder="Username" value={credUsername} onChange={e=>setCredUsername(e.target.value)} className="form-input"/>
+          <input type="password" placeholder={technician?.hasLogin ? "New password (leave blank to keep)" : "Password (min 8 characters)"} value={credPassword} onChange={e=>setCredPassword(e.target.value)} className="form-input"/>
+        </div>
+      </div>}
+
       <div className="mt-6 flex justify-end gap-2"><button type="button" onClick={onClose} className="rounded-lg border border-slate-700 px-4 py-2 text-sm">Cancel</button><button disabled={busy} className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"><Save size={15}/>{busy ? "Saving..." : "Save technician"}</button></div>
     </form>
   </div>;
@@ -40,7 +62,8 @@ function CapabilityBadge({ capability }) {
   return <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/20 bg-amber-500/5 px-2 py-1 text-[10px] font-semibold text-amber-400"><Zap size={11}/> Provider check</span>;
 }
 
-export default function TechnicianCenter() {
+export default function TechnicianCenter({ user }) {
+  const admin = isAdmin(user);
   const [technicians, setTechnicians] = useState([]);
   const [capabilities, setCapabilities] = useState({});
   const [loading, setLoading] = useState(true);
@@ -93,7 +116,7 @@ export default function TechnicianCenter() {
   return <div className="space-y-5">
     <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
       <div><div className="flex items-center gap-2"><div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-2 text-blue-400"><Phone size={17}/></div><h1 className="text-2xl font-bold text-white">Escalation team</h1></div><p className="mt-2 max-w-2xl text-sm text-slate-500">Manage technicians, routing levels and outbound-call readiness. NetEscalate never changes a destination region to bypass a provider restriction.</p></div>
-      <div className="flex gap-2"><button onClick={reload} className="rounded-xl border border-slate-800 bg-slate-900/70 p-3 text-slate-400 hover:text-white"><RefreshCw size={16}/></button><button onClick={()=>setModal("new")} className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500"><Plus size={16}/> Add technician</button></div>
+      <div className="flex gap-2"><button onClick={reload} className="rounded-xl border border-slate-800 bg-slate-900/70 p-3 text-slate-400 hover:text-white"><RefreshCw size={16}/></button>{admin && <button onClick={()=>setModal("new")} className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500"><Plus size={16}/> Add technician</button>}</div>
     </div>
 
     <div className="grid gap-3 md:grid-cols-3">
@@ -112,10 +135,10 @@ export default function TechnicianCenter() {
         <div className="flex items-center gap-3"><div className="rounded-xl border border-slate-800 bg-slate-950 p-2.5"><UserRound size={17} className="text-blue-400"/></div><div><p className="text-sm font-semibold text-white">{t.name}</p><p className="font-mono text-[10px] text-slate-600">{t.technicianId}</p></div></div>
         <div className="font-mono text-sm text-slate-300">{t.phone}</div>
         <div><span className="rounded-full border border-purple-500/20 bg-purple-500/10 px-2 py-1 text-[10px] font-bold text-purple-400">L{t.level}</span></div>
-        <div><div className="flex flex-wrap items-center gap-2"><CapabilityBadge capability={capabilities[t.technicianId]}/><span className={`text-[10px] font-semibold uppercase ${t.active ? "text-emerald-400" : "text-slate-600"}`}>{t.active ? "Active" : "Disabled"}</span></div><p className="mt-1 text-xs text-slate-500">{t.role || "Network Technician"}</p></div>
+        <div><div className="flex flex-wrap items-center gap-2"><CapabilityBadge capability={capabilities[t.technicianId]}/><span className={`text-[10px] font-semibold uppercase ${t.active ? "text-emerald-400" : "text-slate-600"}`}>{t.active ? "Active" : "Disabled"}</span>{admin && t.hasLogin && <span title={`Username: ${t.username}`} className="inline-flex items-center gap-1 rounded-full border border-blue-500/20 bg-blue-500/5 px-2 py-0.5 text-[9px] font-bold text-blue-400"><KeyRound size={9}/> Login enabled</span>}</div><p className="mt-1 text-xs text-slate-500">{t.role || "Network Technician"}</p></div>
         <div className="flex flex-wrap gap-2"><button disabled={!t.active || !!calling || capabilities[t.technicianId]?.state === "UNSUPPORTED"} onClick={()=>testCall(t)} className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-2 text-[10px] font-semibold text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-40"><Phone size={13}/>{calling===t.technicianId ? "Calling…" : "Test call"}</button><button onClick={()=>setModal(t)} title="Edit" className="rounded-lg border border-slate-700 p-2 text-slate-400 hover:text-white"><Edit3 size={14}/></button><button onClick={()=>remove(t)} title="Delete" className="rounded-lg border border-red-500/20 p-2 text-red-400 hover:bg-red-500/5"><Trash2 size={14}/></button></div>
       </div>) : <div className="p-12 text-center"><UserRound className="mx-auto text-slate-700" size={36}/><p className="mt-3 text-sm font-medium text-white">No technicians configured</p><p className="mt-1 text-xs text-slate-600">Add your own number first, then use Test call.</p></div>}
     </section>
-    {modal && <TechnicianModal technician={modal === "new" ? null : modal} onClose={()=>setModal(null)} onSaved={()=>reload()}/>} 
+    {modal && <TechnicianModal technician={modal === "new" ? null : modal} admin={admin} onClose={()=>setModal(null)} onSaved={()=>reload()}/>} 
   </div>;
 }
