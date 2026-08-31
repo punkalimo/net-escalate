@@ -31,18 +31,18 @@ function Shell({ user, onLoggedOut, onUserUpdated, children }) {
     try { await logout(); } finally { disconnectSocket(); onLoggedOut(); }
   }
   return <div className="min-h-screen bg-[#050810] text-slate-200">
-    <aside className="fixed inset-y-0 left-0 z-40 w-64 border-r border-slate-800/80 bg-[#080d16]/95 backdrop-blur-xl">
-      <div className="flex h-16 items-center gap-3 border-b border-slate-800/80 px-5">
+    <aside className="fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-slate-800/80 bg-[#080d16]/95 backdrop-blur-xl">
+      <div className="flex h-16 shrink-0 items-center gap-3 border-b border-slate-800/80 px-5">
         <div className="rounded-xl bg-purple-600 p-2"><Network size={19} /></div>
         <div><p className="font-bold text-white">NetEscalate</p><p className="text-[9px] uppercase tracking-[.22em] text-slate-600">Platform</p></div>
       </div>
-      <div className="p-3">
+      <div className="flex-1 overflow-y-auto p-3">
         <p className="px-3 py-3 text-[10px] font-semibold uppercase tracking-[.2em] text-slate-600">Platform administration</p>
         {NAV.map(([to, label, Icon, end]) => <NavLink key={to} to={to} end={end} className={({ isActive }) => `mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm ${isActive ? "bg-purple-500/10 text-purple-400 ring-1 ring-purple-500/20" : "text-slate-500 hover:bg-slate-800/50 hover:text-slate-200"}`}>
           <Icon size={17} /><span>{label}</span>
         </NavLink>)}
       </div>
-      <div className="absolute bottom-0 left-0 right-0 border-t border-slate-800/80 p-4">
+      <div className="shrink-0 border-t border-slate-800/80 p-4">
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
           <p className="truncate text-xs font-semibold text-white">{user.name}</p>
           <p className="truncate text-[10px] text-slate-600">{user.platformRole?.replaceAll("_", " ")}</p>
