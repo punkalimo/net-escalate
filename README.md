@@ -24,6 +24,29 @@ A compatible agent (Claude, ChatGPT, Gemini, or any MCP client bridged into the 
 
 Every tool call is authenticated exactly like a human dashboard request (same session cookie, same `req.realmId` realm scoping, same authorization middleware) - an agent operates strictly inside the same security boundary a logged-in NOC engineer does, never outside it. See [`docs/WEBMCP.md`](docs/WEBMCP.md) for the full architecture, tool catalog, security model, prompt-injection boundary, and the deterministic demo scenario (`cd backend && npm run seed-demo`).
 
+## WebMCP Challenge Demo
+
+> Don't ask an AI about your NOC. Let the AI work inside your NOC.
+
+**1. What WebMCP adds.** Without it, an AI agent can only describe NetEscalate from a screenshot or a copy-pasted API response. With `document.modelContext.registerTool()` registered directly in the logged-in dashboard tab (`frontend/src/webmcp/`), an agent instead *operates* NetEscalate: it discovers the same tools a human dashboard exposes, calls them with the human's own authenticated session, and its actions - and any pending approvals - render live in the same UI the human is already looking at.
+
+**2. The key tools.** 9 read-only tools (`search_devices`, `get_device_health`, `get_device_interfaces`, `get_interface_health`, `get_active_incidents`, `get_incident`, `investigate_incident`, `get_network_topology`, `find_available_technicians`/`get_technician`) plus 2 platform-admin-only read tools (`list_realms`, `get_realm_overview`), and 3 consequential tools (`create_incident`, `assign_incident`, `add_incident_note`). `investigate_incident` is the flagship: one call orchestrates NetEscalate's existing root-cause, blast-radius, correlation, historical-match, change-correlation and SLA services and returns observed facts, inferred conclusions and recommendations as distinct sections, plus a 0-1 confidence score. Full inventory, schemas and backend routes: [`docs/WEBMCP.md` §4](docs/WEBMCP.md#4-available-tools).
+
+**3. Human approval model.** `create_incident`, `assign_incident` and `add_incident_note` are consequential: calling one blocks on an "Agent is requesting permission to..." card in the **Agent Activity** panel, and the backend fetch that would perform the mutation is literally inside the code path that only runs after a human clicks **Approve** - there is no path around it. **Reject** resolves the call with a normal `APPROVAL_REJECTED` result and performs no mutation at all. See [`docs/WEBMCP.md` §7](docs/WEBMCP.md#7-human-approval-for-consequential-actions).
+
+**4. Realm isolation.** A WebMCP tool call carries no agent-supplied identity or realm id - `req.realmId` is derived once, server-side, from the same session cookie/middleware chain (`requireAuth` → `attachRealmScope`) every human dashboard request already goes through, so an agent can never see or act on another realm's devices, incidents or technicians no matter what a tool call's arguments claim. Covered by automated cross-realm/IDOR tests in `backend/test/webmcpTools.test.js`. See [`docs/WEBMCP.md` §6](docs/WEBMCP.md#6-authentication-and-authorization).
+
+**5. Deterministic demo setup.** `cd backend && npm run seed-demo` seeds an idempotent "Demo NOC" realm: a critical WAN-degradation incident on `Core-Router-01` correlated with three downstream incidents, a full topology, and a login (`demo` / `DemoPass123!`, printed by the script). See [`docs/WEBMCP.md` §15](docs/WEBMCP.md#15-demo-scenario) for the full scripted walkthrough.
+
+**6. How to test WebMCP.** With the seeded scenario running (backend + frontend dev servers, logged in as `demo`), open devtools on the dashboard tab and confirm the tools are live:
+```js
+const tools = await document.modelContext.getTools();
+console.table(tools.map(t => ({ name: t.name })));
+```
+Then point any MCP-compatible agent (Claude, ChatGPT, an MCP browser extension) at that tab and ask it to investigate `Core-Router-01`. Full step-by-step: [`docs/WEBMCP.md` §11-13](docs/WEBMCP.md#11-local-testing).
+
+**7. Known browser requirements.** NetEscalate uses [`@mcp-b/global`](https://www.npmjs.com/package/@mcp-b/global), which installs `document.modelContext` using the browser's **native** WebMCP implementation when one is present (e.g. Chrome behind `chrome://flags/#enable-webmcp-testing`) and a spec-compliant **polyfill** otherwise - the same code runs in both cases, and NetEscalate never claims native support it can't verify in your browser. No extra extension is required to see the tools register; an MCP-compatible client/extension is only needed to have an actual AI agent call them.
+
 ## Core capabilities
 
 - Network device inventory for routers, switches, firewalls, servers, access points and other infrastructure.
@@ -402,3 +425,7 @@ The topology feature is the foundation for the next NetEscalate intelligence lay
 ## Status
 
 NetEscalate is an active development project. The current codebase includes the monitoring, interface health, incident/escalation and topology foundations needed to evolve it into a full network operations and automated incident-response platform.
+
+## License
+
+[MIT](LICENSE)
