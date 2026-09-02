@@ -1,9 +1,63 @@
 import Technician from "../models/Technician.js";
+import Incident from "../models/Incident.js";
 import { escalateToTechnician } from "./escalationService.js";
-import { pushTimelineEvent } from "./timelineService.js";
+import { buildTimelineEvent, pushTimelineEvent } from "./timelineService.js";
 import { emitToRealm } from "./realtimeService.js";
+import { postSystemMessage } from "./chatService.js";
 
 export const MAX_LEVEL = 3;
+
+// incidentId (e.g. NET-1234) is intentionally globally unique across every
+// realm, not per-realm - unlike Device.ipAddress, there's no reason two
+// tenants would ever need the same incident id, and a shared id namespace
+// makes cross-referencing (support, logs) unambiguous.
+export async function generateUniqueIncidentId() {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const incidentId = `NET-${Math.floor(1000 + Math.random() * 9000)}`;
+    const exists = await Incident.exists({ incidentId });
+    if (!exists) return incidentId;
+  }
+  return `NET-${Date.now().toString().slice(-9)}`;
+}
+
+// Shared incident-creation path behind both the human "Create incident"
+// modal (incidentRoutes.js's POST /) and the WebMCP create_incident tool
+// (webmcpRoutes.js) - one place that generates the id, starts the
+// escalation workflow, emits the realtime event and posts the critical-
+// severity chat alert, so an agent-created incident behaves identically to
+// a human-created one from here on. `technician` is optional here (the
+// human UI always supplies one; an agent typically creates the incident
+// first and assigns a technician as a separate, separately-approved step -
+// see assign_incident) - the automatic escalation workflow below still
+// finds a Level 1 technician on its own either way.
+export async function createManualIncident({ realmId, device, location, severity, description, technician = null, source = "MANUAL", actorLabel = "NOC engineer" }, io) {
+  let incident = null;
+  for (let attempt = 0; attempt < 5 && !incident; attempt += 1) {
+    try {
+      incident = await Incident.create({
+        incidentId: await generateUniqueIncidentId(),
+        realmId,
+        device,
+        location,
+        severity,
+        description,
+        ...(technician ? { technician } : {}),
+        source,
+        severityReasons: [source === "AGENT" ? "Created by an AI agent; approved by a human NOC engineer before creation." : "Manually set by a NOC engineer."],
+        timeline: [buildTimelineEvent("INCIDENT_CREATED", source === "AGENT" ? "Incident created by an AI agent (human-approved)." : "Incident manually created.", { actor: actorLabel })]
+      });
+    } catch (error) {
+      if (error?.code !== 11000 || attempt === 4) throw error;
+    }
+  }
+
+  if (io) emitToRealm(realmId, "incident_created", incident);
+  processIncident(incident, io).catch(error => console.error("Escalation workflow error:", error));
+  if (incident.severity === "critical") {
+    postSystemMessage(realmId, `🔴 Critical incident ${incident.incidentId} created: ${incident.device} - ${incident.description}`, { linkedIncidentId: incident.incidentId }).catch(() => {});
+  }
+  return incident;
+}
 
 function emitIncidentUpdate(io, incident) {
   if (io) emitToRealm(incident.realmId, "incident_updated", incident);

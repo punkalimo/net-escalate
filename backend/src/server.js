@@ -17,6 +17,7 @@ import devicePathRoutes from "./routes/devicePathRoutes.js";
 import phase4Routes from "./routes/phase4Routes.js";
 import platformRoutes from "./routes/platformRoutes.js";
 import messageRoutes from "./routes/messageRoutes.js";
+import webmcpRoutes from "./routes/webmcpRoutes.js";
 import { requireAuth, requirePlatform, attachRealmScope } from "./middleware/authMiddleware.js";
 import { verifyAuthToken, AUTH_COOKIE_NAME, verifyRealmContext, REALM_CONTEXT_COOKIE_NAME } from "./services/authService.js";
 import { startAllDeviceMonitoring, setMonitoringSocket } from "./services/deviceMonitoringService.js";
@@ -62,6 +63,10 @@ app.use("/api/interfaces", interfaceRoutes);
 app.use("/api/topology", topologyRoutes);
 app.use("/api/topology", devicePathRoutes);
 app.use("/api/phase4", phase4Routes(io));
+// The WebMCP agent-tool surface (see docs/WEBMCP.md) - mounted after
+// attachRealmScope on purpose, same as every tenant route above, so a tool
+// call is scoped by req.realmId exactly like a normal dashboard request.
+app.use("/api/webmcp", webmcpRoutes(io));
 // Mirrors attachRealmScope's logic exactly (see its comment) so a socket's
 // realm room matches whatever the same session's REST requests are scoped
 // to - including a platform admin's Enter Realm context, so live updates

@@ -112,7 +112,13 @@ const incidentSchema = new mongoose.Schema(
     // text for historical-incident matching - automatic incidents self-
     // resolve on recovery with no human diagnosis to record.
     resolutionNotes: { type: String, default: null },
-    source: { type: String, enum: ["MANUAL", "DEVICE_MONITOR", "INTERFACE_HEALTH", "SYSTEM_HEALTH"], default: "MANUAL" },
+    // "AGENT" = created through a WebMCP tool after explicit human approval
+    // in the UI (see webmcpRoutes.js/create_incident) - kept distinct from
+    // "MANUAL" purely so the dashboard/timeline can visibly attribute it,
+    // not because it behaves differently: it's still a human-approved,
+    // manually-resolvable incident, same as MANUAL (see the RESOLVE route's
+    // ["DEVICE_MONITOR","INTERFACE_HEALTH"] check below, which AGENT never matches).
+    source: { type: String, enum: ["MANUAL", "AGENT", "DEVICE_MONITOR", "INTERFACE_HEALTH", "SYSTEM_HEALTH"], default: "MANUAL" },
     fingerprint: { type: String, default: null, index: true },
     interfaceName: { type: String, default: null },
     interfaceIndex: { type: Number, default: null },

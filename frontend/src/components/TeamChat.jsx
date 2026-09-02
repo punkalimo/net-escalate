@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { MessageSquare, Paperclip, Send, Users, UserRound, X } from "lucide-react";
+import { ChevronLeft, MessageSquare, Paperclip, Send, Users, UserRound, X } from "lucide-react";
 import { getTeamMessages, postTeamMessage, getConversations, getDmMessages, postDmMessage, attachmentUrl } from "../services/api";
 import { getSocket } from "../services/socket";
 
@@ -24,7 +24,7 @@ function Attachment({ attachment, messageId }) {
 function MessageBubble({ message, mine, openIncident }) {
   if (message.systemGenerated) return <div className="flex justify-center"><span className="rounded-full border border-slate-800 bg-slate-900/70 px-3 py-1 text-[11px] text-slate-400">{linkifyIncidentIds(message.text, openIncident)}</span></div>;
   return <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-    <div className={`max-w-md rounded-2xl px-4 py-2.5 text-sm ${mine ? "bg-blue-600 text-white" : "bg-slate-800/80 text-slate-200"}`}>
+    <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm sm:max-w-md ${mine ? "bg-blue-600 text-white" : "bg-slate-800/80 text-slate-200"}`}>
       {!mine && <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">{message.senderName}</p>}
       {message.text && <p className="leading-snug">{linkifyIncidentIds(message.text, openIncident)}</p>}
       <Attachment attachment={message.attachment} messageId={message._id} />
@@ -43,6 +43,12 @@ export default function TeamChat({ user, technicians, openIncident }) {
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [picker, setPicker] = useState(false);
+  // Below sm, the conversation list and the active thread can't fit
+  // side-by-side (that's the two-fixed-width-panes layout that's fine on a
+  // desktop-sized viewport but unusable on a phone) - this tracks which of
+  // the two panes is showing, mobile-only; both always show together at
+  // sm: and above regardless of this state.
+  const [mobileShowThread, setMobileShowThread] = useState(false);
   const fileInputRef = useRef(null);
   const scrollRef = useRef(null);
 
@@ -89,13 +95,18 @@ export default function TeamChat({ user, technicians, openIncident }) {
     finally { setSending(false); }
   }
 
-  function openDm(technicianId) { setMode("dm"); setActiveDm(technicianId); setPicker(false); }
+  function openDm(technicianId) { setMode("dm"); setActiveDm(technicianId); setPicker(false); setMobileShowThread(true); }
+  function openTeam() { setMode("team"); setMobileShowThread(true); }
 
   const activeName = mode === "dm" ? (conversations.find(c => c.technicianId === activeDm)?.name || otherTechnicians.find(t => t.technicianId === activeDm)?.name || activeDm) : null;
 
-  return <div className="flex h-[calc(100vh-9rem)] gap-4">
-    <aside className="flex w-64 shrink-0 flex-col rounded-2xl border border-slate-800/80 bg-slate-900/60">
-      <button onClick={() => setMode("team")} className={`flex items-center gap-2 rounded-t-2xl px-4 py-3 text-sm font-semibold ${mode === "team" ? "bg-blue-500/10 text-blue-400" : "text-slate-400 hover:bg-slate-800/40"}`}><Users size={15} /> Team channel</button>
+  // Below lg, App.jsx's fixed bottom mobile nav bar (~3.25rem tall) overlays
+  // the viewport's bottom edge - this height calc has to reserve room for it
+  // too, or the composer/last messages end up underneath it. That bar is
+  // lg:hidden, so the extra reservation drops away at lg: and up.
+  return <div className="flex h-[calc(100vh-12.25rem)] flex-col gap-4 lg:h-[calc(100vh-9rem)] lg:flex-row">
+    <aside className={`${mobileShowThread ? "hidden" : "flex"} w-full shrink-0 flex-col rounded-2xl border border-slate-800/80 bg-slate-900/60 lg:flex lg:w-64`}>
+      <button onClick={openTeam} className={`flex items-center gap-2 rounded-t-2xl px-4 py-3 text-sm font-semibold ${mode === "team" ? "bg-blue-500/10 text-blue-400" : "text-slate-400 hover:bg-slate-800/40"}`}><Users size={15} /> Team channel</button>
       <div className="flex items-center justify-between px-4 pt-3"><p className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Direct messages</p><button onClick={() => setPicker(p => !p)} className="text-[10px] font-semibold text-blue-400 hover:text-blue-300">+ New</button></div>
       {picker && <div className="mx-3 mt-2 max-h-40 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/60 p-1">{otherTechnicians.map(t => <button key={t.technicianId} onClick={() => openDm(t.technicianId)} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-slate-300 hover:bg-slate-800"><UserRound size={12} />{t.name}</button>)}{!otherTechnicians.length && <p className="px-2 py-1.5 text-xs text-slate-600">No other technicians yet.</p>}</div>}
       <div className="flex-1 overflow-y-auto px-2 py-2">
@@ -107,8 +118,8 @@ export default function TeamChat({ user, technicians, openIncident }) {
       </div>
     </aside>
 
-    <section className="flex flex-1 flex-col overflow-hidden rounded-2xl border border-slate-800/80 bg-slate-900/60">
-      <div className="flex items-center gap-2 border-b border-slate-800/80 px-5 py-4"><MessageSquare size={16} className="text-blue-400" /><h2 className="font-semibold text-white">{mode === "team" ? "Team channel" : activeName || "Select a conversation"}</h2></div>
+    <section className={`${mobileShowThread ? "flex" : "hidden"} flex-1 flex-col overflow-hidden rounded-2xl border border-slate-800/80 bg-slate-900/60 lg:flex`}>
+      <div className="flex items-center gap-2 border-b border-slate-800/80 px-3 py-4 sm:px-5"><button type="button" onClick={() => setMobileShowThread(false)} className="rounded-lg p-1.5 text-slate-400 hover:text-white lg:hidden"><ChevronLeft size={18} /></button><MessageSquare size={16} className="text-blue-400" /><h2 className="font-semibold text-white">{mode === "team" ? "Team channel" : activeName || "Select a conversation"}</h2></div>
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
         {loading ? <p className="text-center text-sm text-slate-600">Loading…</p> : mode === "dm" && !activeDm ? <p className="text-center text-sm text-slate-600">Pick a teammate to start messaging.</p> : messages.length ? messages.map(m => <MessageBubble key={m._id} message={m} mine={m.senderId === me} openIncident={openIncident} />) : <p className="text-center text-sm text-slate-600">No messages yet - say hello.</p>}
       </div>

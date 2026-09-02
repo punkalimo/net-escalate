@@ -72,13 +72,23 @@ const technicianSchema = new mongoose.Schema(
     // technician's "Manage login" action in the Escalation Team panel
     // (technicianRoutes.js's /credentials route) - never through open
     // self-registration.
+    // No `default: null` here on purpose: `unique: true, sparse: true` only
+    // excludes a document from the index where this field is genuinely
+    // ABSENT - a document where it's *present* with value null still gets
+    // indexed (and a second such document then collides on the unique
+    // constraint). A schema default of null would make every login-less
+    // technician (a pure escalation contact, e.g. technicianRoutes.js's
+    // POST / with no username in the body) explicitly carry `username: null`,
+    // defeating the point of `sparse` the moment a realm has more than one.
+    // Leaving no default means Mongoose leaves the path genuinely
+    // undefined - and therefore unset in the stored document - when it's
+    // never assigned, which is what `sparse` actually needs.
     username: {
       type: String,
       unique: true,
       sparse: true,
       lowercase: true,
-      trim: true,
-      default: null
+      trim: true
     },
 
     passwordHash: {

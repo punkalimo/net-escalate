@@ -4,6 +4,26 @@ NetEscalate is a network operations and incident-response platform for monitorin
 
 The project is designed as a practical NOC platform rather than a simple device-status dashboard. It combines device monitoring, interface health, historical telemetry, incident lifecycle management, escalation workflows, and an interactive network topology view.
 
+## Agentic NOC
+
+NetEscalate is not "network monitoring with an AI chatbot bolted on." It is an **agent-native NOC**: humans and AI agents share the same operational workspace, through [WebMCP](https://webmachinelearning.github.io/webmcp/) (`document.modelContext`) - the real, current browser API for exposing website capabilities to AI agents, not a look-alike.
+
+```
+Traditional NOC:
+  Human → dashboard → search → investigate → correlate → assign → document
+
+NetEscalate:
+  Human + Agent → shared operational workspace → structured investigation → human-approved action
+```
+
+A compatible agent (Claude, ChatGPT, Gemini, or any MCP client bridged into the browser tab) can:
+
+- search devices, inspect device/interface health, and pull incident intelligence - all **read-only**
+- run `investigate_incident`, which orchestrates NetEscalate's existing root-cause, blast-radius, correlation, historical-matching, change-correlation and SLA services into one investigation, with observed facts, inferred conclusions and recommendations clearly separated, plus a 0-1 confidence score
+- **with explicit human approval**, create an incident, assign it to a specific technician, or add an investigation note - each shown as an "Agent is requesting permission to..." card in the **Agent Activity** panel before anything happens
+
+Every tool call is authenticated exactly like a human dashboard request (same session cookie, same `req.realmId` realm scoping, same authorization middleware) - an agent operates strictly inside the same security boundary a logged-in NOC engineer does, never outside it. See [`docs/WEBMCP.md`](docs/WEBMCP.md) for the full architecture, tool catalog, security model, prompt-injection boundary, and the deterministic demo scenario (`cd backend && npm run seed-demo`).
+
 ## Core capabilities
 
 - Network device inventory for routers, switches, firewalls, servers, access points and other infrastructure.

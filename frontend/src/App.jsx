@@ -8,9 +8,11 @@ import Phase4CommandCenter from "./components/Phase4CommandCenter";
 import Login from "./components/Login";
 import EnterRealmBanner from "./components/EnterRealmBanner";
 import MyProfileModal from "./components/MyProfile";
+import AgentActivityPanel from "./components/AgentActivityPanel";
 import PlatformApp from "./platform/PlatformApp";
 import { getMe, logout } from "./services/api";
 import { disconnectSocket } from "./services/socket";
+import { initWebMCP, teardownWebMCP } from "./webmcp/index.js";
 
 const NAV_ITEMS = [
   ["overview", "Operations", LayoutDashboard],
@@ -180,13 +182,13 @@ function UserBadge({ user, onLoggedOut, onUserUpdated }) {
     try { await logout(); } finally { disconnectSocket(); onLoggedOut(); }
   }
   return <>
-    <div className="fixed right-3 top-3 z-[80] flex items-center gap-2 rounded-full border border-slate-800 bg-[#080d16]/95 py-1.5 pl-3 pr-1.5 text-xs text-slate-300 shadow-xl backdrop-blur-xl">
-      <UserRound size={13} className="text-slate-500" />
-      <span className="font-medium">{user.name}</span>
-      <span className="text-slate-600">·</span>
-      <span className="text-slate-500">{user.realmName || user.role}</span>
+    <div className="fixed right-2 top-2 z-[80] flex max-w-[calc(100vw-4.5rem)] items-center gap-1.5 rounded-full border border-slate-800 bg-[#080d16]/95 py-1.5 pl-2.5 pr-1.5 text-xs text-slate-300 shadow-xl backdrop-blur-xl sm:right-3 sm:top-3 sm:max-w-none sm:gap-2 sm:pl-3">
+      <UserRound size={13} className="hidden text-slate-500 sm:block" />
+      <span className="max-w-[6rem] truncate font-medium sm:max-w-none">{user.name}</span>
+      <span className="hidden text-slate-600 sm:inline">·</span>
+      <span className="hidden text-slate-500 sm:inline">{user.realmName || user.role}</span>
       <button onClick={() => setProfileOpen(true)} title="My profile" className="ml-1 flex items-center gap-1 rounded-full border border-slate-700 px-2 py-1 text-[11px] text-slate-400 hover:bg-slate-800 hover:text-white"><Settings size={12} /></button>
-      <button onClick={doLogout} disabled={busy} title="Sign out" className="flex items-center gap-1 rounded-full border border-slate-700 px-2 py-1 text-[11px] text-slate-400 hover:bg-slate-800 hover:text-white disabled:opacity-50"><LogOut size={12} />{busy ? "…" : "Sign out"}</button>
+      <button onClick={doLogout} disabled={busy} title="Sign out" className="flex items-center gap-1 rounded-full border border-slate-700 px-2 py-1 text-[11px] text-slate-400 hover:bg-slate-800 hover:text-white disabled:opacity-50"><LogOut size={12} /><span className="hidden sm:inline">{busy ? "…" : "Sign out"}</span></button>
     </div>
     {profileOpen && <MyProfileModal user={user} onClose={() => setProfileOpen(false)} onUpdated={u => { onUserUpdated({ ...user, ...u }); }} />}
   </>;
@@ -202,6 +204,17 @@ export default function App() {
     window.addEventListener("netescalate:unauthenticated", onUnauthenticated);
     return () => window.removeEventListener("netescalate:unauthenticated", onUnauthenticated);
   }, []);
+
+  // Registers the WebMCP tool surface for this tab once we know who's
+  // logged in (see webmcp/index.js/agentContext.js - which tool groups get
+  // registered depends on realm vs platform-admin status). Re-runs if the
+  // user identity/realm-entry state changes; tears down on logout so a
+  // stale session's tools stop being callable.
+  useEffect(() => {
+    if (!user) return undefined;
+    initWebMCP(user);
+    return () => { teardownWebMCP(); };
+  }, [user?.technicianId, user?.enteredRealm?.realmId]);
 
   if (checking) {
     return <div className="flex min-h-screen items-center justify-center bg-[#050810] text-sm text-slate-500"><RefreshCw size={16} className="mr-2 animate-spin" /> Loading…</div>;
@@ -231,6 +244,7 @@ export default function App() {
       <RootCauseCenter />
       <TopologyErrorBoundary><TopologyView /></TopologyErrorBoundary>
       <Phase4CommandCenter />
+      <AgentActivityPanel />
     </div>
   </>;
 }

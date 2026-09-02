@@ -11,6 +11,7 @@
     "create-platform-admin": "node scripts/create-platform-admin.mjs",
     "migrate-to-realms": "node scripts/migrate-to-realms.mjs",
     "backfill-realm-roles": "node scripts/backfill-realm-roles.mjs",
+    "seed-demo": "node scripts/seed-demo-scenario.mjs",
     "test": "node --test"
   },
   "dependencies": {

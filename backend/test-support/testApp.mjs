@@ -15,6 +15,7 @@ import deviceRoutes from "../src/routes/deviceRoutes.js";
 import siteRoutes from "../src/routes/siteRoutes.js";
 import messageRoutes from "../src/routes/messageRoutes.js";
 import platformRoutes from "../src/routes/platformRoutes.js";
+import webmcpRoutes from "../src/routes/webmcpRoutes.js";
 import { requireAuth, requirePlatform, attachRealmScope } from "../src/middleware/authMiddleware.js";
 
 export function buildTestApp() {
@@ -31,5 +32,6 @@ export function buildTestApp() {
   app.use("/api/devices", deviceRoutes);
   app.use("/api/sites", siteRoutes);
   app.use("/api/messages", messageRoutes);
+  app.use("/api/webmcp", webmcpRoutes(null));
   return app;
 }

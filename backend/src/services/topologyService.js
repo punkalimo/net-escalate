@@ -63,10 +63,16 @@ function findDeviceByNeighbor(devices, neighbor) {
   return devices.find(d => [d.hostname, d.deviceId, d.ipAddress].map(normalizeName).filter(Boolean).some(candidate => candidate === target || candidate.includes(target) || target.includes(candidate))) || null;
 }
 
+function edgeState(a, b) {
+  return a.status === "DOWN" || b.status === "DOWN" ? "DOWN" : a.status === "DEGRADED" || b.status === "DEGRADED" ? "DEGRADED" : "UP";
+}
+
 export async function discoverTopology(realmId) {
   const devices = await Device.find({ realmId }).lean().exec();
   const nodes = devices.map(device => ({ id: device.deviceId, label: device.hostname, hostname: device.hostname, ipAddress: device.ipAddress, deviceType: device.deviceType, vendor: device.vendor, model: device.model, location: device.location, status: device.status, monitoringEnabled: device.monitoringEnabled }));
-  const nodeIds = new Set(nodes.map(n => n.id)); const edges = []; const seen = new Set(); const diagnostics = [];
+  const nodeIds = new Set(nodes.map(n => n.id)); const edges = []; const seen = new Set(); const pairsLinked = new Set(); const diagnostics = [];
+  const deviceById = new Map(devices.map(d => [d.deviceId, d]));
+
   for (const device of devices) {
     if (!device.snmp?.enabled) { diagnostics.push({ deviceId: device.deviceId, hostname: device.hostname, status: "SKIPPED", reason: "SNMP disabled" }); continue; }
     try {
@@ -78,12 +84,31 @@ export async function discoverTopology(realmId) {
       for (const neighbor of neighbors) {
         const target = findDeviceByNeighbor(devices, neighbor);
         if (!target || target.deviceId === device.deviceId || !nodeIds.has(target.deviceId)) continue;
-        const key = [device.deviceId, target.deviceId].sort().join("::") + `::${neighbor.localInterface}::${neighbor.remoteInterface}`;
-        if (seen.has(key)) continue; seen.add(key);
-        edges.push({ id: `EDGE-${edges.length + 1}`, source: device.deviceId, target: target.deviceId, sourceInterface: neighbor.localInterface || "", targetInterface: neighbor.remoteInterface || "", protocol: neighbor.protocol, state: device.status === "DOWN" || target.status === "DOWN" ? "DOWN" : device.status === "DEGRADED" || target.status === "DEGRADED" ? "DEGRADED" : "UP", platform: neighbor.platform || "", address: neighbor.address || "" });
+        const pairKey = [device.deviceId, target.deviceId].sort().join("::");
+        const key = `${pairKey}::${neighbor.localInterface}::${neighbor.remoteInterface}`;
+        if (seen.has(key)) continue; seen.add(key); pairsLinked.add(pairKey);
+        edges.push({ id: `EDGE-${edges.length + 1}`, source: device.deviceId, target: target.deviceId, sourceInterface: neighbor.localInterface || "", targetInterface: neighbor.remoteInterface || "", protocol: neighbor.protocol, state: edgeState(device, target), platform: neighbor.platform || "", address: neighbor.address || "" });
       }
     } catch (error) { diagnostics.push({ deviceId: device.deviceId, hostname: device.hostname, status: "ERROR", reason: error.message }); }
   }
+
+  // parentDeviceId (Device.js) is hierarchy metadata an operator can set by
+  // hand regardless of whether SNMP/CDP/LLDP is available on that device -
+  // e.g. no lab hardware, or a device type CDP/LLDP doesn't run on at all
+  // (NetEscalate's own demo scenario relies on this - see
+  // scripts/seed-demo-scenario.mjs). Only fills in a link for a device pair
+  // that real CDP/LLDP discovery above found nothing for; never overrides
+  // real evidence.
+  for (const device of devices) {
+    if (!device.parentDeviceId) continue;
+    const parent = deviceById.get(device.parentDeviceId);
+    if (!parent || parent.deviceId === device.deviceId) continue;
+    const pairKey = [device.deviceId, parent.deviceId].sort().join("::");
+    if (pairsLinked.has(pairKey)) continue;
+    pairsLinked.add(pairKey);
+    edges.push({ id: `EDGE-${edges.length + 1}`, source: parent.deviceId, target: device.deviceId, sourceInterface: "", targetInterface: "", protocol: "MANUAL", state: edgeState(parent, device), platform: "", address: "" });
+  }
+
   return { success: true, generatedAt: new Date().toISOString(), discovery: { nodes: nodes.length, links: edges.length }, nodes, edges, diagnostics };
 }
 export default { discoverTopology };

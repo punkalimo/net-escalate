@@ -1,7 +1,8 @@
 import express from "express";
 import Incident from "../models/Incident.js";
 import Device from "../models/Device.js";
-import { processIncident } from "../services/incidentService.js";
+import Technician from "../models/Technician.js";
+import { processIncident, createManualIncident } from "../services/incidentService.js";
 import { correlateActiveIncidents, incidentDeviceMatches } from "../services/incidentCorrelationService.js";
 import { computeRootCause } from "../services/rootCauseService.js";
 import { mergeDownstream, computeBlastRadius } from "../services/blastRadiusService.js";
@@ -11,27 +12,13 @@ import { requireLevel } from "../middleware/authMiddleware.js";
 import { emitToRealm } from "../services/realtimeService.js";
 import { findSimilarIncidents } from "../services/historicalMatchService.js";
 import { findPossibleChangeCause } from "../services/changeCorrelationService.js";
-import { buildTimelineEvent, pushTimelineEvent } from "../services/timelineService.js";
+import { pushTimelineEvent } from "../services/timelineService.js";
 import { computeSlaStatus } from "../services/escalationPolicyService.js";
 import { MAX_LEVEL } from "../services/incidentService.js";
 import { computeIncidentOverview } from "../services/dashboardService.js";
-import { postSystemMessage } from "../services/chatService.js";
 
 function generateRemediationActionId() {
   return `REM-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-}
-
-async function generateUniqueIncidentId() {
-  // incidentId (e.g. NET-1234) is intentionally globally unique across every
-  // realm, not per-realm - unlike Device.ipAddress, there's no reason two
-  // tenants would ever need the same incident id, and a shared id namespace
-  // makes cross-referencing (support, logs) unambiguous.
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    const incidentId = `NET-${Math.floor(1000 + Math.random() * 9000)}`;
-    const exists = await Incident.exists({ incidentId });
-    if (!exists) return incidentId;
-  }
-  return `NET-${Date.now().toString().slice(-9)}`;
 }
 
 export default function incidentRoutes(io) {
@@ -44,34 +31,43 @@ export default function incidentRoutes(io) {
         return res.status(400).json({ success: false, message: "Missing required incident information." });
       }
 
-      let incident = null;
-      for (let attempt = 0; attempt < 5 && !incident; attempt += 1) {
-        try {
-          incident = await Incident.create({
-            incidentId: await generateUniqueIncidentId(),
-            realmId: req.realmId,
-            device,
-            location,
-            severity,
-            description,
-            technician,
-            source: "MANUAL",
-            severityReasons: ["Manually set by a NOC engineer."],
-            timeline: [buildTimelineEvent("INCIDENT_CREATED", "Incident manually created.", { actor: technician?.name || "NOC engineer" })]
-          });
-        } catch (error) {
-          if (error?.code !== 11000 || attempt === 4) throw error;
-        }
-      }
-
-      if (io) emitToRealm(req.realmId, "incident_created", incident);
-      processIncident(incident, io).catch(error => console.error("Escalation workflow error:", error));
-      if (incident.severity === "critical") postSystemMessage(req.realmId, `🔴 Critical incident ${incident.incidentId} created: ${incident.device} - ${incident.description}`, { linkedIncidentId: incident.incidentId }).catch(() => {});
+      const incident = await createManualIncident({ realmId: req.realmId, device, location, severity, description, technician, source: "MANUAL", actorLabel: technician?.name || "NOC engineer" }, io);
 
       return res.status(201).json({ success: true, message: "Incident created and escalation workflow started.", incident });
     } catch (error) {
       console.error("CREATE INCIDENT ERROR:", error);
       return res.status(500).json({ success: false, message: "Failed to create incident.", error: error.message });
+    }
+  });
+
+  // Direct technician (re)assignment - distinct from the automatic
+  // level-based escalation queue in incidentService.processIncident. Used
+  // by the WebMCP assign_incident tool (webmcpRoutes.js) and available here
+  // for a future manual "Reassign" UI action. Always realm-scoped on both
+  // sides: the technician must belong to req.realmId, never trusted from
+  // the request body alone.
+  router.post("/:incidentId/assign", async (req, res) => {
+    try {
+      const technicianId = String(req.body?.technicianId || "").trim();
+      if (!technicianId) return res.status(400).json({ success: false, message: "technicianId is required." });
+
+      const incident = await Incident.findOne({ incidentId: req.params.incidentId, realmId: req.realmId });
+      if (!incident) return res.status(404).json({ success: false, message: "Incident not found." });
+      if (incident.status === "RESOLVED") return res.status(409).json({ success: false, message: "Resolved incidents cannot be reassigned." });
+
+      const technician = await Technician.findOne({ technicianId, realmId: req.realmId, active: true });
+      if (!technician) return res.status(404).json({ success: false, message: "Active technician not found in this realm." });
+
+      const actor = String(req.body?.actor || "NOC engineer").trim() || "NOC engineer";
+      incident.technician = { id: technician.technicianId, name: technician.name, phone: technician.phone, role: technician.role };
+      incident.escalationLevel = Math.max(Number(incident.escalationLevel) || 1, Number(technician.level) || 1);
+      pushTimelineEvent(incident, "ENGINEER_ASSIGNED", `${technician.name} (Level ${technician.level}, ${technician.role}) was assigned to this incident.`, { actor });
+      await incident.save();
+      if (io) emitToRealm(req.realmId, "incident_updated", incident);
+      return res.json({ success: true, incident: incident.toObject() });
+    } catch (error) {
+      console.error("ASSIGN INCIDENT ERROR:", error);
+      return res.status(500).json({ success: false, message: "Failed to assign incident.", error: error.message });
     }
   });
 
