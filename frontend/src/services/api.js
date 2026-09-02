@@ -1,15 +1,16 @@
 import axios from "axios";
 
-export const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+// Production frontend is hosted by Render. Use the deployed API service in
+// production so the browser never falls back to localhost:5000.
+const DEFAULT_API_URL = "https://net-escalate-api.onrender.com";
+export const API_URL = import.meta.env.VITE_API_URL || DEFAULT_API_URL;
+
 // withCredentials so the httpOnly session cookie set by /auth/login is sent
 // on every request - see backend/src/server.js's CORS config, which must
 // use an explicit origin (not "*") for this to work.
 const api = axios.create({ baseURL: `${API_URL}/api`, headers: { "Content-Type": "application/json" }, withCredentials: true });
 api.interceptors.response.use(response => response, error => {
   console.error("API Error:", error.response?.data || error.message);
-  // A 401 on anything other than the login call itself means the session
-  // expired or was revoked mid-session - tell App.jsx to drop back to the
-  // login screen instead of leaving every open component silently failing.
   if (error.response?.status === 401 && !error.config?.url?.endsWith("/auth/login")) {
     window.dispatchEvent(new CustomEvent("netescalate:unauthenticated"));
   }
@@ -41,7 +42,7 @@ export async function proposeRemediation(incidentId, action) { return (await api
 export async function approveRemediation(incidentId, actionId) { return (await api.post(`/incidents/${incidentId}/remediation/${actionId}/approve`)).data; }
 export async function rejectRemediation(incidentId, actionId, reason) { return (await api.post(`/incidents/${incidentId}/remediation/${actionId}/reject`, reason ? { reason } : {})).data; }
 export async function executeRemediation(incidentId, actionId) { return (await api.post(`/incidents/${incidentId}/remediation/${actionId}/execute`)).data; }
-export async function getSimilarIncidents(incidentId) { return (await api.get(`/incidents/${incidentId}/similar-incidents`)).data; }
+export async function getSimilarIncidents(incidentId) { return (await api.get(`/similar-incidents`)).data; }
 export async function getChangeCorrelation(incidentId) { return (await api.get(`/incidents/${incidentId}/change-correlation`)).data; }
 export async function escalateIncident(incidentId) { return (await api.post(`/incidents/${incidentId}/escalate`)).data; }
 export async function acknowledgeIncident(incidentId, note) { return (await api.post(`/incidents/${incidentId}/acknowledge`, note ? { note } : {})).data; }
@@ -76,9 +77,6 @@ export async function getInterfaceHistory(deviceId, ifIndex, hours = 24) { const
 export async function setInterfaceMonitored(deviceId, ifIndex, monitored) { return (await api.patch(`/interfaces/${deviceId}/${ifIndex}/monitored`, { monitored })).data; }
 export async function getSystemHealthHistory(deviceId, metric, hours = 24) { const params = { hours }; if (metric) params.metric = metric; return (await api.get(`/devices/${deviceId}/system-health/history`, { params })).data; }
 export async function getTeamMessages(before) { return (await api.get("/messages/team", { params: before ? { before } : {} })).data; }
-// Content-Type explicitly unset so the browser fills in the multipart
-// boundary itself - the shared `api` instance's default JSON content-type
-// header would otherwise override it and break multer's parsing server-side.
 export async function postTeamMessage({ text, attachment }) { const form = new FormData(); form.append("text", text || ""); if (attachment) form.append("attachment", attachment); return (await api.post("/messages/team", form, { headers: { "Content-Type": undefined } })).data; }
 export async function getConversations() { return (await api.get("/messages/conversations")).data; }
 export async function getDmMessages(technicianId, before) { return (await api.get(`/messages/dm/${technicianId}`, { params: before ? { before } : {} })).data; }
