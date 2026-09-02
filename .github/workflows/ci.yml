@@ -49,6 +49,8 @@ jobs:
         run: npm ci
       - name: Lint
         run: npm run lint
+      - name: WebMCP unit tests
+        run: npm test
       - name: UI contract checks
         run: npm run test:ui-contract
       - name: Build

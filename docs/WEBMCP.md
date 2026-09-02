@@ -266,9 +266,25 @@ or `node --test test/webmcpTools.test.js` on its own) covers:
   without `approved: true`, then succeeding once approved
 - `assign_incident`/`add_incident_note` emitting a realm-scoped
   `incident_updated` Socket.IO event to the correct realm only
+- realm isolation on the *list*-shaped tools too (`get_active_incidents`,
+  `find_available_technicians`, `get_network_topology`), not just
+  single-record lookups
+- a sweep of every read tool's response for `passwordHash`, JWT-shaped
+  strings, the real `JWT_SECRET`/`MONGODB_URI` values, and stack-trace
+  markers - not just the SNMP-community/password-hash cases above
 
 `backend/test/topologyService.test.js` covers the `parentDeviceId` manual
 topology fallback used by the demo scenario (§11).
+
+Frontend: `frontend/test/webmcpSecurity.test.mjs` (run via `cd frontend &&
+npm test`) is pure-logic coverage for `src/webmcp/security.js`'s approval
+state machine - the half of the approval gate the backend suite above can't
+see, since a rejected consequential call never reaches the backend at all.
+It asserts: a pending approval never auto-resolves; `resolveApproval(id, true)`
+approves and only settles the matching id; `resolveApproval(id, false, reason)`
+rejects with the reason intact; the `running → success/error` and
+`pending_approval → approved/rejected` Agent Activity states are exactly what
+`AgentActivityPanel.jsx` renders from.
 
 Run the whole backend suite with `cd backend && npm test` (uses Node's
 built-in test runner, `mongodb-memory-server`, and `supertest` - no real
@@ -276,6 +292,8 @@ MongoDB or network access required). If you see spurious `mongodb-memory-server`
 "instance failed to start" failures, that's the test runner's default
 concurrency spinning up too many in-memory Mongo instances at once on your
 machine, not a real failure - run `node --test --test-concurrency=1` instead.
+Both `npm test` scripts (backend and frontend) run in CI on every push/PR -
+see `.github/workflows/ci.yml`.
 
 ## 11. Local testing
 
@@ -416,3 +434,39 @@ same `auditLogService.js` privileged-action trail platform actions and
 credential changes already use): authenticated user, realm, tool name,
 read/write classification, target type/id, and (for write tools) the
 approval outcome. No secrets are ever logged.
+
+## 19. Production headers
+
+WebMCP's own access checks (`@mcp-b/webmcp-polyfill`'s `validateWebMcpAccess()`,
+which `document.modelContext.registerTool()` calls on every registration)
+read two response headers on the **document** (the HTML page load), not on
+any API response:
+
+- `Permissions-Policy: tools=(self)` - explicitly allows this origin's own
+  top-level document to use WebMCP, and explicitly denies it to any
+  cross-origin `<iframe>` that embeds NetEscalate. Without this header, an
+  embedding page could otherwise attempt `@mcp-b/global`'s iframe transport
+  (which defaults to `allowedOrigins: ["*"]`) and get a live `document.modelContext`
+  connection into a logged-in NOC engineer's tab.
+- `Origin-Agent-Cluster: ?1` - requests origin-keyed agent clustering, which
+  the polyfill's `validateOriginAgentCluster()` defensively checks for.
+
+Because these are document-level headers, they belong on whatever serves the
+frontend's HTML - **not** on `backend/src/server.js`'s JSON API responses,
+which is a different origin and doesn't render `document.modelContext` at
+all. `frontend/vite.config.js` sets both (plus `X-Frame-Options: DENY` and
+`Content-Security-Policy: frame-ancestors 'self'`, same motivation as the
+Permissions-Policy line) for `npm run dev` and `npm run preview`. This repo
+has no bundled production static-hosting config (no Dockerfile, no
+Vercel/Netlify/nginx config) to attach the same headers to - whichever host
+serves the production build must be configured to send them on its HTML
+response.
+
+Separately: cookies are `httpOnly`, `sameSite: "lax"`, and `secure` whenever
+`NODE_ENV=production` (`backend/src/routes/authRoutes.js`), and CORS is
+locked to a single explicit `FRONTEND_URL` origin with `credentials: true`
+(required for the cookie to ride along at all - see `server.js`) rather than
+a wildcard. Both require the deployed frontend and backend to actually be
+served over HTTPS in production for `secure` cookies to work, which - like
+the header question above - is a hosting-platform decision this repo does
+not make on your behalf.

@@ -2,6 +2,7 @@
   "name": "net-escalate-backend",
   "version": "1.0.0",
   "description": "AI Network and IT Incident Escalation Agent",
+  "license": "MIT",
   "main": "src/server.js",
   "type": "module",
   "scripts": {

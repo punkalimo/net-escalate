@@ -105,6 +105,25 @@ test("get_technician never exposes a password hash", async () => {
   assert.equal(res.body.technician.hasLogin, true);
 });
 
+test("no webmcp tool response - across the richest read tools - ever contains a password hash, JWT, session token, DB credential or stack trace", async () => {
+  const responses = [];
+  responses.push(await agentA.get("/api/webmcp/devices"));
+  responses.push(await agentA.get(`/api/webmcp/devices/${deviceA.deviceId}/health`));
+  responses.push(await agentA.get(`/api/webmcp/devices/${deviceA.deviceId}/interfaces`));
+  responses.push(await agentA.get("/api/webmcp/technicians"));
+  responses.push(await agentA.get("/api/webmcp/technicians/TECH-A0"));
+  responses.push(await agentA.get(`/api/webmcp/incidents/${incidentA.incidentId}`));
+  responses.push(await agentA.get(`/api/webmcp/incidents/${incidentA.incidentId}/investigate`));
+  responses.push(await agentA.get("/api/webmcp/topology"));
+  const forbidden = ["passwordHash", "TestPass123!", "super-secret-community", "eyJhbGciOi", "authtoken", "netescalate_session", process.env.JWT_SECRET, "MONGODB_URI", "mongodb://", ".js:"].filter(Boolean);
+  for (const res of responses) {
+    const text = JSON.stringify(res.body);
+    for (const needle of forbidden) {
+      assert.equal(text.toLowerCase().includes(needle.toLowerCase()), false, `response leaked "${needle}": ${text.slice(0, 200)}`);
+    }
+  }
+});
+
 // ---- investigate_incident orchestration ----------------------------------
 
 test("investigate_incident bundles root cause, blast radius, SLA and a 0-1 confidence score", async () => {
@@ -140,6 +159,20 @@ test("Realm A's webmcp tools cannot see Realm B's device, incident or technician
 
   const searchRes = await agentA.get("/api/webmcp/devices");
   assert.ok(!searchRes.body.devices.some(d => d.deviceId === deviceB.deviceId));
+});
+
+test("Realm A's list-shaped webmcp tools (active incidents, technicians, topology) never include Realm B's data", async () => {
+  const incidentsRes = await agentA.get("/api/webmcp/incidents");
+  assert.equal(incidentsRes.status, 200);
+  assert.ok(!incidentsRes.body.incidents.some(i => i.incidentId === incidentB.incidentId));
+
+  const techniciansRes = await agentA.get("/api/webmcp/technicians");
+  assert.equal(techniciansRes.status, 200);
+  assert.ok(!techniciansRes.body.technicians.some(t => t.technicianId === technicianB1.technicianId));
+
+  const topologyRes = await agentA.get("/api/webmcp/topology");
+  assert.equal(topologyRes.status, 200);
+  assert.ok(!(topologyRes.body.nodes || []).some(n => n.id === deviceB.deviceId || n.hostname === deviceB.hostname));
 });
 
 test("Realm A cannot assign Realm B's technician to its own incident (cross-realm technicianId injection)", async () => {

@@ -56,7 +56,12 @@ export async function registerReadTool({ name, description, inputSchema, run, su
         const entry = logToolStart({ tool: name, classification: "read", summary: summarize ? summarize(args) : `Ran ${name}` });
         try {
           const result = await run(args || {});
-          logToolResult(entry.id, { status: "success", detail: result });
+          // Re-derive the summary now that `result` is actually available -
+          // summarize() at logToolStart time above only ever sees `args`,
+          // since the call hasn't run yet (e.g. "search_devices — N match(es)"
+          // needs the result's count). This is what the Agent Activity panel
+          // ultimately renders for a completed call.
+          logToolResult(entry.id, { status: "success", detail: result, summary: summarize ? summarize(args, result) : undefined });
           return toContent(result);
         } catch (error) {
           const normalized = normalizeError(error);
@@ -98,7 +103,10 @@ export async function registerActionTool({ name, description, inputSchema, run, 
         const entry = logToolStart({ tool: name, classification: "write", summary: summarize ? summarize(args) : `Running ${name}` });
         try {
           const result = await run(args || {});
-          logToolResult(entry.id, { status: "success", detail: result });
+          // See registerReadTool's identical comment: summarize(args, result)
+          // can only be evaluated once `result` exists, e.g. create_incident's
+          // summary wants the newly-created incidentId.
+          logToolResult(entry.id, { status: "success", detail: result, summary: summarize ? summarize(args, result) : undefined });
           return toContent(result);
         } catch (error) {
           const normalized = normalizeError(error);
