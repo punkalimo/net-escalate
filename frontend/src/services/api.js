@@ -2,7 +2,7 @@ import axios from "axios";
 
 // Production frontend is hosted by Render. Use the deployed API service in
 // production so the browser never falls back to localhost:5000.
-const DEFAULT_API_URL = "https://net-escalate-api.onrender.com";
+const DEFAULT_API_URL = "https://net-escalate.onrender.com";
 export const API_URL = import.meta.env.VITE_API_URL || DEFAULT_API_URL;
 // withCredentials so the httpOnly session cookie set by /auth/login is sent
 // on every request - see backend/src/server.js's CORS config, which must
