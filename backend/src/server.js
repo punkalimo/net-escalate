@@ -30,9 +30,6 @@ const app = express();
 const httpServer = createServer(app);
 const startedAt = Date.now();
 
-// Production frontend is hosted on Render. Normalize FRONTEND_URL so a
-// trailing slash or accidental whitespace in Render's environment variable
-// cannot cause an otherwise valid browser origin to be rejected by CORS.
 const DEFAULT_FRONTEND_ORIGIN = "https://net-escalate-frontend.onrender.com";
 const normalizeOrigin = (value) => {
   const trimmed = String(value || "").trim().replace(/\/+$/, "");
@@ -52,8 +49,6 @@ const ALLOWED_ORIGINS = new Set([
 ]);
 const corsOptions = {
   origin: (origin, callback) => {
-    // Requests without an Origin header (curl, health checks, server-to-server
-    // calls) do not need CORS headers and should not be rejected.
     if (!origin) return callback(null, true);
     const normalizedRequestOrigin = normalizeOrigin(origin);
     if (ALLOWED_ORIGINS.has(normalizedRequestOrigin)) return callback(null, true);
@@ -74,18 +69,8 @@ app.use(express.json({ limit: "1mb" }));
 app.get("/", (req, res) => res.json({ name: "NetEscalate AI", status: "online", uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000) }));
 app.get("/api/health", async (req, res) => { const mongoReady = mongoose.connection.readyState === 1; return res.status(mongoReady ? 200 : 503).json({ status: mongoReady ? "healthy" : "degraded", service: "NetEscalate API", database: mongoReady ? "connected" : "disconnected", uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), timestamp: new Date().toISOString() }); });
 app.use("/api/auth", authRoutes());
-// Everything else under /api requires a valid session - registered after
-// /api/health and /api/auth above, so those stay public (Express matches
-// middleware in registration order).
 app.use("/api", requireAuth);
-// Platform routes are a separate authority axis (requirePlatform, not tied
-// to any single realm) - mounted before attachRealmScope/the tenant routes
-// below since they don't want a realm filter forced onto them.
 app.use("/api/platform", requirePlatform, platformRoutes());
-// Every tenant-scoped route below relies on req.realmId, computed here from
-// the authenticated session (or a platform admin's Enter Realm context) -
-// see attachRealmScope's own comment for why this must never come from a
-// client-supplied param.
 app.use("/api", attachRealmScope);
 app.use("/api/incidents", incidentRoutes(io));
 app.use("/api/technicians", technicianRoutes);
@@ -96,14 +81,7 @@ app.use("/api/interfaces", interfaceRoutes);
 app.use("/api/topology", topologyRoutes);
 app.use("/api/topology", devicePathRoutes);
 app.use("/api/phase4", phase4Routes(io));
-// The WebMCP agent-tool surface (see docs/WEBMCP.md) - mounted after
-// attachRealmScope on purpose, same as every tenant route above, so a tool
-// call is scoped by req.realmId exactly like a normal dashboard request.
 app.use("/api/webmcp", webmcpRoutes(io));
-// Mirrors attachRealmScope's logic exactly (see its comment) so a socket's
-// realm room matches whatever the same session's REST requests are scoped
-// to - including a platform admin's Enter Realm context, so live updates
-// keep working during a support session.
 io.use((socket, next) => {
   try {
     const cookies = parseCookie(socket.handshake.headers.cookie || "");
@@ -123,21 +101,80 @@ io.use((socket, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-const server = httpServer.listen(PORT, "0.0.0.0", () => {
-  console.log(`NetEscalate API listening on port ${PORT}`);
-});
+let server = null;
 
-process.on("SIGTERM", () => {
+async function startBackend() {
+  const mongoUri = String(process.env.MONGODB_URI || "").trim();
+
+  if (!mongoUri) {
+    throw new Error("MONGODB_URI is not configured. Add the MongoDB connection string to the Render backend environment variables.");
+  }
+
+  mongoose.connection.on("connected", () => {
+    console.log("MongoDB connected.");
+  });
+
+  mongoose.connection.on("error", (error) => {
+    console.error("MongoDB connection error:", error.message);
+  });
+
+  mongoose.connection.on("disconnected", () => {
+    console.warn("MongoDB disconnected.");
+  });
+
+  console.log("Connecting to MongoDB...");
+  await mongoose.connect(mongoUri, {
+    serverSelectionTimeoutMS: 10000,
+    socketTimeoutMS: 45000
+  });
+
+  server = httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`NetEscalate API listening on port ${PORT}`);
+  });
+
+  // All background workers query MongoDB during startup. Do not start them
+  // until the connection above has been established; otherwise Mongoose
+  // buffers the initial Device.find() calls and eventually crashes the
+  // Render process with "buffering timed out after 10000ms".
+  try {
+    await startAllDeviceMonitoring();
+    await startAllInterfaceMonitoring();
+    startSeverityEscalationSweep();
+    startIncidentCorrelationSweep();
+    startEscalationTimeoutSweep();
+    startConfigSnapshotSweep();
+    console.log("NetEscalate background services started.");
+  } catch (error) {
+    console.error("Failed to start NetEscalate background services:", error);
+    throw error;
+  }
+}
+
+process.on("SIGTERM", async () => {
   stopSeverityEscalationSweep();
   stopIncidentCorrelationSweep();
   stopEscalationTimeoutSweep();
   stopConfigSnapshotSweep();
-  server.close(() => process.exit(0));
+
+  if (server) {
+    server.close(async () => {
+      await mongoose.disconnect();
+      process.exit(0);
+    });
+  } else {
+    await mongoose.disconnect();
+    process.exit(0);
+  }
 });
 
-startAllDeviceMonitoring();
-startAllInterfaceMonitoring();
-startSeverityEscalationSweep();
-startIncidentCorrelationSweep();
-startEscalationTimeoutSweep();
-startConfigSnapshotSweep();
+startBackend().catch(async (error) => {
+  console.error("NetEscalate startup failed:", error);
+  if (server) {
+    server.close();
+  }
+  try {
+    await mongoose.disconnect();
+  } catch (_) {
+  }
+  process.exit(1);
+});
