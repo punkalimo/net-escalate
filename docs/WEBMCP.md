@@ -322,6 +322,67 @@ appear exactly as documented in §4, with the same descriptions an agent
 reads to decide when/how to call them (see §14 below for why those
 descriptions matter).
 
+### External MCP client bridge (`@mcp-b/webmcp-local-relay`)
+
+For a client that doesn't have its own in-browser MCP connector (Claude
+Desktop, Claude Code, Cursor, Windsurf - anything that speaks MCP over
+stdio), NetEscalate ships `@mcp-b/webmcp-local-relay`'s browser embed
+(`frontend/index.html`) alongside the CLI relay it talks to
+(`@mcp-b/webmcp-local-relay` in `frontend/package.json`'s devDependencies,
+runnable as `cd frontend && npm run mcp-relay`):
+
+```
+ Browser tab (NetEscalate)              Local machine
+┌──────────────────────────┐           ┌───────────────────────┐
+│ document.modelContext     │           │                       │
+│  (frontend/src/webmcp/)   │           │  webmcp-local-relay   │
+│           │                │ WebSocket │  (MCP server)         │
+│  embed.js (index.html) ────┼──────────▶  127.0.0.1:9333        │
+└──────────────────────────┘           └──────────┬────────────┘
+                                                   │ stdio, JSON-RPC
+                                        ┌──────────▼────────────┐
+                                        │ Claude Desktop / Code, │
+                                        │ Cursor, or any MCP     │
+                                        │ client                 │
+                                        └────────────────────────┘
+```
+
+The embed script only ever dials `127.0.0.1` (or whatever `data-relay-host`/
+`data-relay-port` attributes you set on the script tag) - if nothing is
+listening there it's a silent no-op, so it's safe to leave in production
+(including the deployed Render instance). It never talks to any host
+other than the one you're running the relay on yourself.
+
+**Setup:**
+
+1. Add the relay to your MCP client's config:
+   ```json
+   {
+     "mcpServers": {
+       "webmcp-local-relay": {
+         "command": "npx",
+         "args": ["-y", "@mcp-b/webmcp-local-relay@latest"]
+       }
+     }
+   }
+   ```
+   (Claude Desktop: Settings → Developer → Edit Config. Claude Code:
+   `claude mcp add webmcp-local-relay -- npx -y @mcp-b/webmcp-local-relay@latest`.
+   Cursor/Windsurf: their respective `mcp.json`.) Or run it standalone from
+   this repo without a separate npx fetch: `cd frontend && npm run mcp-relay`.
+2. Open NetEscalate (local dev or the deployed URL) and log in - the embed
+   script in `index.html` loads on every page view and connects
+   automatically once a relay is listening.
+3. In your MCP client, call `webmcp_list_sources` to confirm the tab is
+   connected, then `webmcp_list_tools` to see the full tool list from §4.
+   From there the client calls tools by name directly (e.g.
+   `investigate_incident`) exactly as it would any other MCP tool - the
+   approval gate (§7) and realm scoping (§6) still apply unchanged, since
+   the relay only forwards to `document.modelContext.executeTool()`
+   in-page; it adds no privilege of its own.
+4. Tools appear/disappear automatically as the tab opens, reloads, or
+   closes - no reconnect needed.
+
 ## 14. Tool description philosophy
 
 Every tool's `description` in `frontend/src/webmcp/*.js` is written for an

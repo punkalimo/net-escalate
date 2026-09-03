@@ -9,5 +9,13 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <!--
+      Bridges this tab's document.modelContext WebMCP tools (registered in
+      frontend/src/webmcp/) to any external MCP client - Claude Desktop,
+      Claude Code, Cursor, Windsurf - over a localhost relay. Connects only
+      to 127.0.0.1; a no-op if nothing is listening there. See
+      docs/WEBMCP.md's "External MCP client bridge" section for setup.
+    -->
+    <script src="https://cdn.jsdelivr.net/npm/@mcp-b/webmcp-local-relay@5.1.0/dist/browser/embed.js"></script>
   </body>
 </html>
