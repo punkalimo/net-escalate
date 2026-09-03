@@ -30,23 +30,42 @@ const app = express();
 const httpServer = createServer(app);
 const startedAt = Date.now();
 
-// Production frontend is hosted on Render. Keep an explicit allowlist for
-// credentialed requests so the auth/session cookies work cross-origin.
-const FRONTEND_ORIGIN = process.env.FRONTEND_URL || "https://net-escalate-frontend.onrender.com";
+// Production frontend is hosted on Render. Normalize FRONTEND_URL so a
+// trailing slash or accidental whitespace in Render's environment variable
+// cannot cause an otherwise valid browser origin to be rejected by CORS.
+const DEFAULT_FRONTEND_ORIGIN = "https://net-escalate-frontend.onrender.com";
+const normalizeOrigin = (value) => {
+  const trimmed = String(value || "").trim().replace(/\/+$/, "");
+  if (!trimmed) return DEFAULT_FRONTEND_ORIGIN;
+  try {
+    return new URL(trimmed).origin;
+  } catch {
+    return trimmed;
+  }
+};
+const FRONTEND_ORIGIN = normalizeOrigin(process.env.FRONTEND_URL || DEFAULT_FRONTEND_ORIGIN);
 const ALLOWED_ORIGINS = new Set([
   FRONTEND_ORIGIN,
-  "https://net-escalate-frontend.onrender.com",
-  "http://localhost:5173"
+  DEFAULT_FRONTEND_ORIGIN,
+  "http://localhost:5173",
+  "http://127.0.0.1:5173"
 ]);
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || ALLOWED_ORIGINS.has(origin)) return callback(null, true);
-    return callback(new Error(`CORS origin not allowed: ${origin}`));
+    // Requests without an Origin header (curl, health checks, server-to-server
+    // calls) do not need CORS headers and should not be rejected.
+    if (!origin) return callback(null, true);
+    const normalizedRequestOrigin = normalizeOrigin(origin);
+    if (ALLOWED_ORIGINS.has(normalizedRequestOrigin)) return callback(null, true);
+    console.warn(`CORS origin rejected: ${origin}`);
+    return callback(null, false);
   },
-  credentials: true
+  credentials: true,
+  methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
 };
 
-const io = new Server(httpServer, { cors: { ...corsOptions, methods: ["GET", "POST", "PATCH", "DELETE"] } });
+const io = new Server(httpServer, { cors: corsOptions });
 setMonitoringSocket(io);
 global.io = io;
 app.use(cors(corsOptions));
