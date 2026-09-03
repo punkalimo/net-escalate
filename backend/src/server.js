@@ -29,13 +29,27 @@ import { startConfigSnapshotSweep, stopConfigSnapshotSweep } from "./services/co
 const app = express();
 const httpServer = createServer(app);
 const startedAt = Date.now();
-// credentials:true requires an explicit origin, not "*" - the auth cookie
-// depends on this (see authRoutes.js).
-const FRONTEND_ORIGIN = process.env.FRONTEND_URL || "http://localhost:5173";
-const io = new Server(httpServer, { cors: { origin: FRONTEND_ORIGIN, methods: ["GET", "POST", "PATCH", "DELETE"], credentials: true } });
+
+// Production frontend is hosted on Render. Keep an explicit allowlist for
+// credentialed requests so the auth/session cookies work cross-origin.
+const FRONTEND_ORIGIN = process.env.FRONTEND_URL || "https://net-escalate-frontend.onrender.com";
+const ALLOWED_ORIGINS = new Set([
+  FRONTEND_ORIGIN,
+  "https://net-escalate-frontend.onrender.com",
+  "http://localhost:5173"
+]);
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin || ALLOWED_ORIGINS.has(origin)) return callback(null, true);
+    return callback(new Error(`CORS origin not allowed: ${origin}`));
+  },
+  credentials: true
+};
+
+const io = new Server(httpServer, { cors: { ...corsOptions, methods: ["GET", "POST", "PATCH", "DELETE"] } });
 setMonitoringSocket(io);
 global.io = io;
-app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }));
+app.use(cors(corsOptions));
 app.use(cookieParser());
 app.use(express.json({ limit: "1mb" }));
 app.get("/", (req, res) => res.json({ name: "NetEscalate AI", status: "online", uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000) }));
@@ -78,39 +92,33 @@ io.use((socket, next) => {
     socket.user = user;
     socket.technicianId = user.technicianId || null;
     if (user.platformRole) {
-      try {
-        const context = verifyRealmContext(cookies[REALM_CONTEXT_COOKIE_NAME]);
-        socket.realmId = context.realmId;
-      } catch (contextError) {
-        socket.realmId = null;
-      }
+      const realmContext = verifyRealmContext(cookies[REALM_CONTEXT_COOKIE_NAME]);
+      socket.realmId = realmContext?.realmId || null;
     } else {
       socket.realmId = user.realmId || null;
     }
-    return next();
-  } catch (error) {
-    return next(new Error("unauthorized"));
+    next();
+  } catch (err) {
+    next(err);
   }
 });
-io.on("connection", socket => {
-  console.log("Dashboard connected:", socket.id, `(${socket.user?.username})`);
-  // Every realm-scoped push (see realtimeService.js's emitToRealm) targets
-  // this room - a socket with no realmId (a platform admin who hasn't
-  // entered a realm) simply joins nothing and receives no tenant-owned
-  // real-time events, matching how their REST requests behave too.
-  if (socket.realmId) socket.join(String(socket.realmId));
-  // A technician's own private room - see realtimeService.js's
-  // emitToTechnician, the only sanctioned way to reach one person (a DM)
-  // rather than a whole realm.
-  if (socket.technicianId) socket.join(`tech:${socket.technicianId}`);
-  socket.on("disconnect", () => console.log("Dashboard disconnected:", socket.id));
-});
+
 const PORT = process.env.PORT || 5000;
-let monitoringStarted = false;
-function startBackgroundMonitoring() { if (monitoringStarted) return; monitoringStarted = true; Promise.allSettled([startAllDeviceMonitoring(), startAllInterfaceMonitoring()]).then(results => results.forEach((result, index) => { const name = index === 0 ? "device monitoring" : "interface monitoring"; if (result.status === "fulfilled") console.log(`[STARTUP] ${name} initialized.`); else console.error(`[STARTUP] ${name} failed:`, result.reason); })); startSeverityEscalationSweep(); startIncidentCorrelationSweep(); startEscalationTimeoutSweep(); startConfigSnapshotSweep(); }
-async function listen() { await new Promise((resolve, reject) => { const onError = error => { httpServer.off("listening", onListening); reject(error); }; const onListening = () => { httpServer.off("error", onError); resolve(); }; httpServer.once("error", onError); httpServer.once("listening", onListening); httpServer.listen(PORT, "0.0.0.0"); }); }
-async function startServer() { try { if (!process.env.MONGODB_URI) throw new Error("MONGODB_URI is not configured."); await mongoose.connect(process.env.MONGODB_URI); console.log("MongoDB connected"); await listen(); console.log(`NetEscalate API running on port ${PORT} (0.0.0.0)`); console.log("[STARTUP] Dashboard/API ready; starting monitoring in background."); startBackgroundMonitoring(); } catch (error) { if (error?.code === "EADDRINUSE") console.error(`[STARTUP] Port ${PORT} is already in use. Stop the existing NetEscalate process or choose another PORT.`); else console.error("Failed to start server:", error); process.exit(1); } }
-async function shutdown(signal) { console.log(`[SHUTDOWN] ${signal} received; closing server connections.`); stopSeverityEscalationSweep(); stopIncidentCorrelationSweep(); stopEscalationTimeoutSweep(); stopConfigSnapshotSweep(); io.close(); await new Promise(resolve => httpServer.close(() => resolve())); await mongoose.disconnect(); process.exit(0); }
-process.once("SIGINT", () => shutdown("SIGINT"));
-process.once("SIGTERM", () => shutdown("SIGTERM"));
-startServer();
+const server = httpServer.listen(PORT, "0.0.0.0", () => {
+  console.log(`NetEscalate API listening on port ${PORT}`);
+});
+
+process.on("SIGTERM", () => {
+  stopSeverityEscalationSweep();
+  stopIncidentCorrelationSweep();
+  stopEscalationTimeoutSweep();
+  stopConfigSnapshotSweep();
+  server.close(() => process.exit(0));
+});
+
+startAllDeviceMonitoring();
+startAllInterfaceMonitoring();
+startSeverityEscalationSweep();
+startIncidentCorrelationSweep();
+startEscalationTimeoutSweep();
+startConfigSnapshotSweep();
