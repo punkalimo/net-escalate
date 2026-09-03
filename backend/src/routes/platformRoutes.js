@@ -12,11 +12,13 @@ import { computePlatformSitePerformance } from "../services/platformPerformanceS
 import { signRealmContext, hashPassword, REALM_CONTEXT_COOKIE_NAME, REALM_CONTEXT_COOKIE_MAX_AGE_MS } from "../services/authService.js";
 import { logAudit } from "../services/auditLogService.js";
 
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const REALM_CONTEXT_COOKIE_OPTIONS = {
   httpOnly: true,
-  sameSite: "lax",
-  secure: process.env.NODE_ENV === "production",
-  maxAge: REALM_CONTEXT_COOKIE_MAX_AGE_MS
+  sameSite: IS_PRODUCTION ? "none" : "lax",
+  secure: IS_PRODUCTION,
+  maxAge: REALM_CONTEXT_COOKIE_MAX_AGE_MS,
+  path: "/"
 };
 
 function toObjectId(id) {
@@ -145,7 +147,9 @@ export default function platformRoutes() {
 
   // Enter Realm: issues the short-lived realm-context cookie (separate from
   // the main identity token - see authService.js's comment on why) and
-  // audits the entry. Exit just clears the cookie.
+  // audits the entry. The production cookie uses the same cross-origin
+  // policy as the main authentication cookie because the frontend and API
+  // are deployed on different Render origins.
   router.post("/realms/:id/enter", async (req, res) => {
     try {
       const realmObjectId = toObjectId(req.params.id);
@@ -166,7 +170,7 @@ export default function platformRoutes() {
 
   router.post("/exit-realm", async (req, res) => {
     const context = req.cookies?.[REALM_CONTEXT_COOKIE_NAME];
-    res.clearCookie(REALM_CONTEXT_COOKIE_NAME, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production" });
+    res.clearCookie(REALM_CONTEXT_COOKIE_NAME, { httpOnly: true, sameSite: IS_PRODUCTION ? "none" : "lax", secure: IS_PRODUCTION, path: "/" });
     if (context) {
       logAudit({ actor: req.user, targetType: "Realm", action: "PLATFORM_EXITED_REALM", req });
     }
