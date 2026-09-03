@@ -132,10 +132,16 @@ async function startBackend() {
     console.log(`NetEscalate API listening on port ${PORT}`);
   });
 
-  // All background workers query MongoDB during startup. Do not start them
-  // until the connection above has been established; otherwise Mongoose
-  // buffers the initial Device.find() calls and eventually crashes the
-  // Render process with "buffering timed out after 10000ms".
+  // Render's edge can reuse HTTP connections longer than Node's defaults.
+  // Keep the server-side connection alive long enough to avoid intermittent
+  // 502s caused by the edge attempting to reuse a socket Node has closed.
+  server.keepAliveTimeout = 120 * 1000;
+  server.headersTimeout = 120 * 1000;
+
+  // Background monitoring is operationally important, but a failure in one
+  // worker must never take the HTTP API down. The API remains available while
+  // the failing worker is logged for diagnosis/recovery instead of rethrowing
+  // into the process-level startup failure handler.
   try {
     await startAllDeviceMonitoring();
     await startAllInterfaceMonitoring();
@@ -145,8 +151,7 @@ async function startBackend() {
     startConfigSnapshotSweep();
     console.log("NetEscalate background services started.");
   } catch (error) {
-    console.error("Failed to start NetEscalate background services:", error);
-    throw error;
+    console.error("Failed to start NetEscalate background services; API remains online:", error);
   }
 }
 
