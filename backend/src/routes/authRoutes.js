@@ -5,20 +5,18 @@ import { verifyPassword, hashPassword, signAuthToken, AUTH_COOKIE_NAME, AUTH_COO
 import { requireAuth, attachRealmScope } from "../middleware/authMiddleware.js";
 import { logAudit } from "../services/auditLogService.js";
 
-// httpOnly cookie, not a token the frontend reads/stores itself: avoids
-// exposing the session token to XSS on this React app, at the cost of
-// needing CORS credentials + a matching frontend axios/socket.io
-// withCredentials (see server.js and frontend/src/services/api.js).
+// The frontend and API are on different Render origins. In production the
+// session cookie therefore needs cross-origin SameSite=None semantics and
+// Secure=true. httpOnly keeps the JWT inaccessible to browser JavaScript.
+// The localhost branch remains convenient for local development over HTTP.
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const COOKIE_OPTIONS = {
   httpOnly: true,
-  sameSite: "lax",
-  secure: process.env.NODE_ENV === "production",
+  sameSite: IS_PRODUCTION ? "none" : "lax",
+  secure: IS_PRODUCTION,
   maxAge: AUTH_COOKIE_MAX_AGE_MS
 };
 
-// Shared shape for the "user" object returned to the frontend, used at
-// login and again whenever a self-service update re-issues the cookie -
-// keeping this in one place avoids the three call sites drifting apart.
 async function buildUserPayload(technician) {
   const realm = technician.realmId ? await Realm.findById(technician.realmId).select("name").lean() : null;
   return { technicianId: technician.technicianId, username: technician.username, name: technician.name, phone: technician.phone || null, role: technician.role, level: technician.level, realmId: technician.realmId ? String(technician.realmId) : null, realmName: realm?.name || null, realmRole: technician.realmRole || null, platformRole: technician.platformRole || null };
@@ -53,7 +51,7 @@ export default function authRoutes() {
 
   router.post("/logout", (req, res) => {
     logAudit({ actor: req.user || null, targetType: "Technician", targetId: req.user?.technicianId, action: "LOGOUT", req });
-    res.clearCookie(AUTH_COOKIE_NAME, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production" });
+    res.clearCookie(AUTH_COOKIE_NAME, { httpOnly: true, sameSite: IS_PRODUCTION ? "none" : "lax", secure: IS_PRODUCTION });
     return res.json({ success: true });
   });
 
@@ -61,10 +59,6 @@ export default function authRoutes() {
     return res.json({ success: true, user: { ...req.user, enteredRealm: req.realmContext || null } });
   });
 
-  // Self-service bio edit - deliberately gated only by requireAuth (no
-  // realm-manager check): editing your OWN name/phone is scoped entirely by
-  // req.user.technicianId, not by any other technician's id, so there's
-  // nothing to authorize beyond "is this a valid session."
   router.patch("/me", requireAuth, async (req, res) => {
     try {
       const updates = {};
@@ -85,10 +79,6 @@ export default function authRoutes() {
     }
   });
 
-  // Self-service credential change - requires the CURRENT password (unlike
-  // an admin's POST /technicians/:id/credentials reset), so an unattended,
-  // still-logged-in session can't be used to silently lock out the real
-  // account owner.
   router.post("/me/credentials", requireAuth, async (req, res) => {
     try {
       const currentPassword = String(req.body?.currentPassword || "");
@@ -97,11 +87,6 @@ export default function authRoutes() {
 
       const technician = await Technician.findOne({ technicianId: req.user.technicianId });
       if (!technician) return res.status(404).json({ success: false, message: "Account not found." });
-      // 400, not 401: the session itself is valid (requireAuth already
-      // passed) - a wrong current password is a validation failure, not an
-      // authentication one. Returning 401 here would trip api.js's global
-      // interceptor, which force-logs-out the user on ANY 401 outside
-      // /auth/login, incorrectly ending their still-valid session.
       if (!await verifyPassword(currentPassword, technician.passwordHash)) return res.status(400).json({ success: false, message: "Current password is incorrect." });
 
       if (newUsername) technician.username = newUsername;
