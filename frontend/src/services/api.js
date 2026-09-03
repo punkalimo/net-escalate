@@ -10,10 +10,17 @@ export const API_URL = import.meta.env.VITE_API_URL || DEFAULT_API_URL;
 const api = axios.create({ baseURL: `${API_URL}/api`, headers: { "Content-Type": "application/json" }, withCredentials: true });
 api.interceptors.response.use(response => response, error => {
   console.error("API Error:", error.response?.data || error.message);
-  // A 401 on anything other than the login call itself means the session
-  // expired or was revoked mid-session - tell App.jsx to drop back to the
-  // login screen instead of leaving every open component silently failing.
-  if (error.response?.status === 401 && !error.config?.url?.endsWith("/auth/login")) {
+
+  // /auth/me is intentionally allowed to return 401 during application
+  // bootstrap: App.jsx calls it before a user has logged in. Dispatching the
+  // global unauthenticated event for that expected 401 can race with a
+  // successful login and immediately wipe out the freshly authenticated user.
+  // Login itself is also excluded. Other protected API 401s still terminate
+  // an expired/revoked session as before.
+  const requestUrl = error.config?.url || "";
+  const isAuthBootstrap = requestUrl.endsWith("/auth/me");
+  const isLoginRequest = requestUrl.endsWith("/auth/login");
+  if (error.response?.status === 401 && !isAuthBootstrap && !isLoginRequest) {
     window.dispatchEvent(new CustomEvent("netescalate:unauthenticated"));
   }
   return Promise.reject(error);
@@ -57,7 +64,7 @@ export async function deleteTechnician(technicianId) { return (await api.delete(
 export async function getTechnicianCapability(technicianId) { return (await api.get(`/technicians/${technicianId}/capability`)).data; }
 export async function setTechnicianCredentials(technicianId, username, password) { return (await api.post(`/technicians/${technicianId}/credentials`, { username, password })).data; }
 export async function updateTechnicianRole(technicianId, realmRole) { return (await api.patch(`/technicians/${technicianId}/role`, { realmRole })).data; }
-export async function getTechnicianPerformance() { return (await api.get("/technicians/performance")).data; }
+export async function getTechnicianPerformance() { return (await api.get(`/technicians/performance`)).data; }
 export async function testTechnicianCall(technicianId, payload = {}) { return (await api.post(`/technicians/${technicianId}/test-call`, payload)).data; }
 export async function getSites() { return (await api.get("/sites")).data; }
 export async function getSite(siteId) { return (await api.get(`/sites/${siteId}`)).data; }
