@@ -66,7 +66,33 @@ export function verifyRealmContext(token) {
   return jwt.verify(token, JWT_SECRET);
 }
 
+// Bearer token for the remote MCP + OAuth bridge (oauthService.js,
+// mcpAuthMiddleware.js - see docs/WEBMCP.md's "Remote MCP + OAuth" section).
+// A SEPARATE token kind from the session cookie's JWT above, even though
+// both are signed with the same JWT_SECRET: the `typ` claim is checked on
+// verify specifically so an mcp_access token can never be replayed as a
+// session cookie (or vice versa) even if one were somehow smuggled into the
+// wrong header/cookie. realmId is fixed at OAuth consent time and is never
+// re-derived from anything the caller supplies afterward - the remote-MCP
+// equivalent of attachRealmScope never trusting a client-supplied realmId.
+export const MCP_ACCESS_TOKEN_TTL_SECONDS = 60 * 60; // 1h
+
+export function signMcpAccessToken({ technicianId, realmId, clientId, scope }) {
+  return jwt.sign(
+    { typ: "mcp_access", technicianId, realmId: String(realmId), clientId, scope },
+    JWT_SECRET,
+    { expiresIn: MCP_ACCESS_TOKEN_TTL_SECONDS }
+  );
+}
+
+export function verifyMcpAccessToken(token) {
+  const payload = jwt.verify(token, JWT_SECRET);
+  if (payload.typ !== "mcp_access") throw new Error("Not an MCP access token.");
+  return payload;
+}
+
 export default {
   hashPassword, verifyPassword, signAuthToken, verifyAuthToken, AUTH_COOKIE_NAME, AUTH_COOKIE_MAX_AGE_MS,
-  signRealmContext, verifyRealmContext, REALM_CONTEXT_COOKIE_NAME, REALM_CONTEXT_COOKIE_MAX_AGE_MS
+  signRealmContext, verifyRealmContext, REALM_CONTEXT_COOKIE_NAME, REALM_CONTEXT_COOKIE_MAX_AGE_MS,
+  signMcpAccessToken, verifyMcpAccessToken, MCP_ACCESS_TOKEN_TTL_SECONDS
 };

@@ -170,6 +170,21 @@ export function toolError(res, status, code, message) {
   return res.status(status).json({ success: false, error: { code, message } });
 }
 
+// Thrown by the pure tool-handler functions in webmcpToolHandlers.js, which
+// have no `res` to write to directly (they're called from both the
+// cookie-authed browser route in webmcpRoutes.js AND the Bearer-authed
+// remote MCP route in mcpRoutes.js - each wraps this into its own response
+// shape: webmcpRoutes.js via toolError() above, mcpRoutes.js via an MCP
+// isError content block). Carries the same status/code/message toolError()
+// writes, just not yet written anywhere.
+export class ToolError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
 // ---- Audit -----------------------------------------------------------
 
 // One row per WebMCP tool invocation, layered on the app's existing
@@ -192,4 +207,4 @@ export async function logToolInvocation(req, { tool, classification, targetType 
   });
 }
 
-export default { sanitizeDevice, sanitizeDeviceHealth, sanitizeInterface, sanitizeTechnician, sanitizeIncidentSummary, sanitizeIncidentDetail, toolError, logToolInvocation };
+export default { sanitizeDevice, sanitizeDeviceHealth, sanitizeInterface, sanitizeTechnician, sanitizeIncidentSummary, sanitizeIncidentDetail, toolError, ToolError, logToolInvocation };

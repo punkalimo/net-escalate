@@ -270,6 +270,19 @@ or `node --test test/webmcpTools.test.js` on its own) covers:
 `backend/test/topologyService.test.js` covers the `parentDeviceId` manual
 topology fallback used by the demo scenario (§11).
 
+`backend/test/mcpOauth.test.js` covers the remote MCP + OAuth bridge (§13's
+"Remote MCP + OAuth" subsection): the full authorization_code+PKCE→token
+flow, realm isolation between two technicians' tokens (using a real MCP
+client - `@modelcontextprotocol/sdk`'s `Client`/`StreamableHTTPClientTransport`
+- not just raw HTTP), a platform admin's realm-picker consent, PKCE
+mismatch/redirect_uri mismatch/single-use-code rejection, refresh token
+rotation and reuse-detection, a session-cookie JWT being rejected by `/mcp`
+(wrong token type), and that exactly the 10 read-only tools - never the 3
+write tools - are exposed via `tools/list`. **Requires**
+`MCP_OAUTH_REDIRECT_URIS` to be set in the environment (matching
+`https://chatgpt.example/callback`, the fixed test redirect URI) - like
+`JWT_SECRET`, there's no committed default; see `backend/.env.example`.
+
 Run the whole backend suite with `cd backend && npm test` (uses Node's
 built-in test runner, `mongodb-memory-server`, and `supertest` - no real
 MongoDB or network access required). If you see spurious `mongodb-memory-server`
@@ -383,6 +396,92 @@ other than the one you're running the relay on yourself.
 4. Tools appear/disappear automatically as the tab opens, reloads, or
    closes - no reconnect needed.
 
+### Remote MCP + OAuth (for ChatGPT)
+
+Both paths above require an MCP client that can either run inside the
+browser tab (§13's in-browser connector) or spawn a local stdio process
+(`@mcp-b/webmcp-local-relay`, just above). **ChatGPT supports neither.**
+We tested this directly: asking ChatGPT (in Chrome) whether it could reach
+into another open tab's `document.modelContext`, it answered *"No... I
+cannot see your Chrome tabs, their DOM, JavaScript context, DevTools, or
+browser session."* And per OpenAI's own documentation, ChatGPT's Developer
+Mode MCP connectors (Desktop or web - both have this limitation) only
+accept a **public HTTPS endpoint with OAuth**, never a local/stdio server -
+the opposite of what the local relay provides.
+
+So a third, separate bridge exists for this case: a standalone remote MCP
+server, reachable at `/mcp`, authenticated via OAuth 2.0 Authorization Code
++ PKCE (`/oauth/*`) instead of the session cookie every other route uses.
+
+```
+ChatGPT (web or Desktop, Developer Mode connector)
+   │  HTTPS, Bearer access_token
+   ▼
+POST /mcp                     (backend/src/routes/mcpRoutes.js)
+   │  mcpAuthMiddleware.js validates the token → { technicianId, realmId }
+   ▼
+webmcpToolHandlers.js          <- the SAME functions webmcpRoutes.js calls
+   │
+   ▼
+Existing services (rootCauseService, blastRadiusService, ...) → MongoDB
+```
+
+```
+ChatGPT connector setup                 NetEscalate
+   │  "Authorize"                       GET/POST /oauth/authorize
+   ▼                                      → reuses Technician login
+   redirect w/ code                       → consent screen, realm picker
+   │                                        for platform admins
+   ▼
+POST /oauth/token  ──────────────────►  exchanges code for:
+                                           - access_token  (JWT, 1h)
+                                           - refresh_token (opaque, hashed)
+```
+
+**Read-only, deliberately.** `create_incident`, `assign_incident`, and
+`add_incident_note` are *not* registered on `/mcp`. Those three gate on a
+client-supplied `approved: true` boolean in the request body (see
+`webmcpRoutes.js`) with no server-side proof a human ever saw the request -
+the browser-based flow's safety comes entirely from the trust model (only
+the same tab a human is staring at can set that flag), which doesn't extend
+to a remote, publicly-reachable OAuth client. Until a real server-side
+approval mechanism exists, the remote bridge stays read-only. This is
+covered by `backend/test/mcpOauth.test.js`'s tool-inventory test.
+
+**Realm scoping** works the same way it always has: never trusted from the
+client. For an OAuth token, the realm is fixed once, at `/oauth/authorize`
+consent time - a normal technician's own realm, or (for a platform admin)
+whichever realm they explicitly pick on the consent screen - and baked into
+the signed access token's claims (`typ: "mcp_access"`, distinct from the
+session cookie's JWT so one can never be replayed as the other). Every
+subsequent `/mcp` call re-reads that realm straight from the token; nothing
+about it is ever re-derived from the request.
+
+**Setup:**
+
+1. Set `MCP_OAUTH_REDIRECT_URIS` (comma-separated) in the backend's
+   environment to the callback URL ChatGPT's connector setup gives you, and
+   optionally `MCP_OAUTH_CLIENT_ID`/`MCP_OAUTH_CLIENT_SECRET` (defaults:
+   `chatgpt-connector` / no secret - PKCE alone is a sufficient public-client
+   protection, matching how Claude/Cursor's own OAuth flows work). See
+   `backend/.env.example`.
+2. In ChatGPT (web or Desktop), add a custom connector under Settings →
+   Connectors → Advanced → Developer Mode, pointing at
+   `https://<your-backend>/mcp`. A spec-compliant client discovers the OAuth
+   endpoints automatically from `/.well-known/oauth-authorization-server`
+   and `/.well-known/oauth-protected-resource` (RFC 8414 / RFC 9728) - no
+   need to hand-type the authorize/token URLs.
+3. Authorize: you're redirected to `/oauth/authorize`, sign in with your
+   NetEscalate technician credentials, review the (read-only) scope, and
+   approve.
+4. Ask ChatGPT something like *"Search my NetEscalate devices"* - it calls
+   `search_devices` over the MCP connection, scoped to whichever realm you
+   picked at step 3.
+
+This is a single-client OAuth server (one fixed `client_id`/redirect-URI
+allowlist, no Dynamic Client Registration) - it's a bridge for one specific
+remote consumer, not a general-purpose multi-tenant OAuth provider.
+
 ## 14. Tool description philosophy
 
 Every tool's `description` in `frontend/src/webmcp/*.js` is written for an
@@ -476,4 +575,8 @@ Every tool invocation - read or write - writes one row to the existing
 same `auditLogService.js` privileged-action trail platform actions and
 credential changes already use): authenticated user, realm, tool name,
 read/write classification, target type/id, and (for write tools) the
-approval outcome. No secrets are ever logged.
+approval outcome. No secrets are ever logged. A remote-MCP-originated call
+(§13) logs through the exact same `logToolInvocation()` call, tagged with
+`metadata: { channel: "remote_mcp", clientId }` so the audit trail
+distinguishes a ChatGPT/remote-MCP call from a browser-tab call without
+needing a separate log.

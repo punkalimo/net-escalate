@@ -16,6 +16,8 @@ import siteRoutes from "../src/routes/siteRoutes.js";
 import messageRoutes from "../src/routes/messageRoutes.js";
 import platformRoutes from "../src/routes/platformRoutes.js";
 import webmcpRoutes from "../src/routes/webmcpRoutes.js";
+import oauthRoutes, { wellKnownRoutes } from "../src/routes/oauthRoutes.js";
+import mcpRoutes from "../src/routes/mcpRoutes.js";
 import { requireAuth, requirePlatform, attachRealmScope } from "../src/middleware/authMiddleware.js";
 
 export function buildTestApp() {
@@ -33,5 +35,10 @@ export function buildTestApp() {
   app.use("/api/sites", siteRoutes);
   app.use("/api/messages", messageRoutes);
   app.use("/api/webmcp", webmcpRoutes(null));
+  // No rate limiting here (production-only, see server.js) - a test suite
+  // legitimately makes many more requests per minute than a real client.
+  app.use("/.well-known", wellKnownRoutes());
+  app.use("/oauth", oauthRoutes());
+  app.use("/mcp", mcpRoutes());
   return app;
 }

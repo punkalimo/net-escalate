@@ -6,6 +6,7 @@ import { parseCookie } from "cookie";
 import mongoose from "mongoose";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import { rateLimit } from "express-rate-limit";
 import authRoutes from "./routes/authRoutes.js";
 import incidentRoutes from "./routes/incidentRoutes.js";
 import technicianRoutes from "./routes/technicianRoutes.js";
@@ -18,6 +19,8 @@ import phase4Routes from "./routes/phase4Routes.js";
 import platformRoutes from "./routes/platformRoutes.js";
 import messageRoutes from "./routes/messageRoutes.js";
 import webmcpRoutes from "./routes/webmcpRoutes.js";
+import oauthRoutes, { wellKnownRoutes } from "./routes/oauthRoutes.js";
+import mcpRoutes from "./routes/mcpRoutes.js";
 import { requireAuth, requirePlatform, attachRealmScope } from "./middleware/authMiddleware.js";
 import { verifyAuthToken, AUTH_COOKIE_NAME, verifyRealmContext, REALM_CONTEXT_COOKIE_NAME } from "./services/authService.js";
 import { startAllDeviceMonitoring, setMonitoringSocket } from "./services/deviceMonitoringService.js";
@@ -60,6 +63,15 @@ const corsOptions = {
   allowedHeaders: ["Content-Type", "Authorization"]
 };
 
+// /oauth and /mcp are the only two surfaces in this app reachable without an
+// existing NetEscalate session cookie - see docs/WEBMCP.md's "Remote MCP +
+// OAuth" section. Nothing else in the app has rate limiting today because
+// everything else already sits behind requireAuth; these two are public by
+// necessity (that's the whole point - a remote OAuth client has no cookie),
+// so they get their own limiter instead.
+const oauthRateLimit = rateLimit({ windowMs: 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false });
+const mcpRateLimit = rateLimit({ windowMs: 60 * 1000, limit: 60, standardHeaders: true, legacyHeaders: false });
+
 const io = new Server(httpServer, { cors: corsOptions });
 setMonitoringSocket(io);
 global.io = io;
@@ -82,6 +94,15 @@ app.use("/api/topology", topologyRoutes);
 app.use("/api/topology", devicePathRoutes);
 app.use("/api/phase4", phase4Routes(io));
 app.use("/api/webmcp", webmcpRoutes(io));
+
+// Outside the /api namespace on purpose - these authenticate via OAuth
+// Bearer tokens (mcpAuthMiddleware.js), not the requireAuth session cookie
+// mounted on /api above, and must be reachable without ever having visited
+// the dashboard first (a remote MCP client has no cookie to send).
+app.use("/.well-known", wellKnownRoutes());
+app.use("/oauth", oauthRateLimit, oauthRoutes());
+app.use("/mcp", mcpRateLimit, mcpRoutes());
+
 io.use((socket, next) => {
   try {
     const cookies = parseCookie(socket.handshake.headers.cookie || "");
